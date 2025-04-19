@@ -784,6 +784,124 @@ def render_metric_card(label: str, metric: dict, help_text: str = "") -> None:
     </div>
     """, unsafe_allow_html=True)
 
+def format_metric_evidence(metric_name: str, value: float, threshold: float, comparison: str = ">") -> str:
+    """Format metric evidence with value and threshold."""
+    return f"{metric_name} = {value:.2f} {comparison} {threshold:.2f} threshold"
+
+def normalize_metrics(metrics: dict) -> dict:
+    """Normalize metrics to 0-1 scale for visualization."""
+    max_values = {
+        "lcom": 1.0,
+        "cbo": 10.0,
+        "dit": 5.0,
+        "cc": 15.0,
+        "rfc": 30.0
+    }
+    return {
+        k: min(v["value"] / max_values[k], 1.0)
+        for k, v in metrics.items()
+    }
+
+def render_metrics_chart(metrics: dict):
+    """Render a bar chart for metrics visualization."""
+    try:
+        import plotly.graph_objects as go
+        
+        # Normalize metrics for visualization
+        norm_metrics = normalize_metrics(metrics)
+        
+        # Prepare data for radar chart
+        categories = list(norm_metrics.keys())
+        values = list(norm_metrics.values())
+        
+        # Create radar chart
+        fig = go.Figure()
+        
+        # Add metrics trace
+        fig.add_trace(go.Scatterpolar(
+            r=values,
+            theta=categories,
+            fill='toself',
+            name='Current Values'
+        ))
+        
+        # Add threshold trace
+        thresholds = [metrics[k]["threshold"] / max_values.get(k, 1.0) for k in categories]
+        fig.add_trace(go.Scatterpolar(
+            r=thresholds,
+            theta=categories,
+            fill='toself',
+            name='Thresholds',
+            fillcolor='rgba(255, 0, 0, 0.2)',
+            line=dict(color='red', dash='dot')
+        ))
+        
+        # Update layout
+        fig.update_layout(
+            polar=dict(
+                radialaxis=dict(
+                    visible=True,
+                    range=[0, 1]
+                )
+            ),
+            showlegend=True,
+            title="Metrics Overview (Normalized)",
+            height=400
+        )
+        
+        return fig
+        
+    except ImportError:
+        # Fallback to simple bar chart if plotly is not available
+        import pandas as pd
+        chart_data = pd.DataFrame({
+            'Metric': list(metrics.keys()),
+            'Value': [m["value"] for m in metrics.values()],
+            'Threshold': [m["threshold"] for m in metrics.values()]
+        })
+        return chart_data
+
+def get_smell_evidence(smell: str, metrics: dict, basic_metrics: dict) -> str:
+    """Generate evidence-based reasoning for code smells."""
+    evidence = []
+    
+    if smell == "God Class":
+        wmc = basic_metrics.get("wmc", 0)
+        lcom = metrics["lcom"]["value"]
+        loc = basic_metrics.get("loc", 0)
+        evidence.extend([
+            f"High complexity (WMC = {wmc} > {basic_metrics.get('wmc_threshold', 20)})",
+            f"Low cohesion (LCOM = {lcom:.2f} > {metrics['lcom']['threshold']})",
+            f"Large size (LOC = {loc} > {basic_metrics.get('loc_threshold', 200)})"
+        ])
+    
+    elif smell == "Lazy Class":
+        wmc = basic_metrics.get("wmc", 0)
+        methods = basic_metrics.get("total_methods", 0)
+        loc = basic_metrics.get("loc", 0)
+        evidence.extend([
+            f"Low complexity (WMC = {wmc} < {basic_metrics.get('wmc_threshold', 20)})",
+            f"Few methods (Methods = {methods} < {basic_metrics.get('methods_threshold', 5)})",
+            f"Small size (LOC = {loc} < {basic_metrics.get('loc_threshold', 50)})"
+        ])
+    
+    elif smell == "Feature Envy":
+        cbo = metrics["cbo"]["value"]
+        rfc = metrics["rfc"]["value"]
+        evidence.extend([
+            f"High coupling (CBO = {cbo} > {metrics['cbo']['threshold']})",
+            f"Many external calls (RFC = {rfc} > {metrics['rfc']['threshold']})"
+        ])
+    
+    elif smell == "Data Class":
+        methods = basic_metrics.get("total_methods", 0)
+        getters_setters = basic_metrics.get("getters_setters", 0)
+        if methods > 0:
+            ratio = getters_setters / methods
+            evidence.append(f"High accessor ratio ({getters_setters}/{methods} = {ratio:.2f} > 0.7)")
+    
+    return "\n".join([f"• {e}" for e in evidence])
+
 def render_detection_tab():
     """Render the Smell Detection tab content."""
     st.markdown("""
@@ -1069,32 +1187,40 @@ def render_detection_tab():
                         if st.session_state.analysis_results["smells"]:
                             for smell in st.session_state.analysis_results["smells"]:
                                 smell_color = {
-                                    "God Class": ("��", "#dc3545", "High complexity and low cohesion"),
+                                    "God Class": ("🔴", "#dc3545", "High complexity and low cohesion"),
                                     "Data Class": ("🟡", "#ffc107", "Lacks behavior"),
                                     "Lazy Class": ("🟠", "#fd7e14", "Low responsibility"),
                                     "Feature Envy": ("🟣", "#6f42c1", "High coupling"),
                                     "Refused Bequest": ("🔵", "#0d6efd", "Inheritance misuse")
                                 }.get(smell, ("⚪", "#6c757d", ""))
                                 
-                                # Reference relevant metrics in reasoning
-                                metrics_reference = ""
-                                if smell == "God Class":
-                                    metrics_reference = f"WMC = {basic_metrics['wmc']}, LCOM = {advanced_metrics['lcom']['value']}"
-                                elif smell == "Feature Envy":
-                                    metrics_reference = f"CBO = {advanced_metrics['cbo']['value']}"
-                                
-                                st.markdown(f"""
-                                <div class="smell-card" style="border-left: 4px solid {smell_color[1]}; padding: 1rem; margin-bottom: 1rem;">
-                                    <h4 style="color: {smell_color[1]}">{smell_color[0]} {smell}</h4>
-                                    <p><i>{st.session_state.analysis_results['reasoning'][smell]}</i></p>
-                                    <small style="color: #666;">
-                                        {smell_color[2]}<br>
-                                        {metrics_reference}
-                                    </small>
-                                </div>
-                                """, unsafe_allow_html=True)
+                                st.markdown(
+                                    f"### {smell_color[0]} {smell}"
+                                )
+                                st.markdown(
+                                    f"*{st.session_state.analysis_results['reasoning'][smell]}*"
+                                )
+                                st.markdown(
+                                    f"<div style='padding-left: 1rem; border-left: 4px solid {smell_color[1]}; margin: 1rem 0;'>"
+                                    f"<p style='color: #666; margin: 0;'>{smell_color[2]}</p>"
+                                    "</div>",
+                                    unsafe_allow_html=True
+                                )
                         else:
                             st.success("✅ No code smells detected in this file")
+                        
+                        # Add metrics visualization
+                        with st.expander("📊 Metric Visualization", expanded=True):
+                            try:
+                                chart = render_metrics_chart(advanced_metrics)
+                                if hasattr(chart, 'show'):
+                                    # It's a plotly figure
+                                    st.plotly_chart(chart, use_container_width=True)
+                                else:
+                                    # It's a pandas DataFrame
+                                    st.bar_chart(chart.set_index('Metric')[['Value', 'Threshold']])
+                            except Exception as e:
+                                st.error(f"Could not render metrics chart: {str(e)}")
                         
                     except Exception as e:
                         st.error(f"❌ Error displaying analysis results: {str(e)}")
