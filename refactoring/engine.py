@@ -400,45 +400,79 @@ class RefactoringEngine:
                 self.logger.error(f"Unknown model: {model_name}")
                 return False
             
-            # Load tokenizer
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                model_id,
-                trust_remote_code=True
-            )
+            # Load tokenizer first
+            try:
+                self.logger.info(f"Loading tokenizer for {model_id}")
+                self.tokenizer = AutoTokenizer.from_pretrained(
+                    model_id,
+                    trust_remote_code=True,
+                    use_fast=True
+                )
+            except Exception as e:
+                self.logger.error(f"Failed to load tokenizer: {str(e)}")
+                return False
             
-            # Prepare device-specific configuration
+            # Prepare device configuration
             device_config = {
-                "device_map": "auto" if self.device == "mps" else self.device,
+                "device_map": "auto" if self.device in ["cuda", "mps"] else self.device,
                 "torch_dtype": getattr(torch, self.memory_config.get("torch_dtype", "float16")),
+                "trust_remote_code": True
             }
             
-            # Add memory configuration if provided
+            # Add quantization options
+            if self.memory_config.get("load_in_8bit"):
+                device_config["load_in_8bit"] = True
+                try:
+                    import bitsandbytes
+                    self.logger.info("8-bit quantization enabled")
+                except ImportError:
+                    self.logger.warning("bitsandbytes not installed, falling back to full precision")
+                    device_config["load_in_8bit"] = False
+            
+            # Add memory limits if specified
             if "max_memory" in self.memory_config:
                 device_config["max_memory"] = self.memory_config["max_memory"]
             
-            # Add 8-bit quantization if specified
-            if self.memory_config.get("load_in_8bit"):
-                device_config["load_in_8bit"] = True
-            
-            self.logger.info(f"Loading model with config: {device_config}")
-            
-            # Load model with configuration
-            self.model = AutoModelForCausalLM.from_pretrained(
-                model_id,
-                trust_remote_code=True,
-                **device_config
-            )
-            
-            # Move model to device if not using device_map
-            if self.device not in ["auto", None] and not device_config.get("device_map"):
-                self.model = self.model.to(self.device)
-            
-            self.model_name = model_name
-            self.logger.info(f"Model loaded successfully on {self.device}")
-            return True
+            # Load the model
+            self.logger.info(f"Loading model {model_id} with config: {device_config}")
+            try:
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    model_id,
+                    **device_config
+                )
+                
+                # Move model to device if needed
+                if self.device not in ["auto", None] and not device_config.get("device_map"):
+                    self.logger.info(f"Moving model to {self.device}")
+                    self.model = self.model.to(self.device)
+                
+                # Set model to evaluation mode
+                self.model.eval()
+                
+                # Test the model with a simple input
+                self.logger.info("Testing model with sample input")
+                test_input = self.tokenizer("def test():", return_tensors="pt")
+                if self.device != "cpu":
+                    test_input = {k: v.to(self.device) for k, v in test_input.items()}
+                
+                with torch.no_grad():
+                    _ = self.model.generate(
+                        test_input["input_ids"],
+                        max_length=20,
+                        num_return_sequences=1
+                    )
+                
+                self.model_name = model_name
+                self.logger.info(f"Model loaded and tested successfully on {self.device}")
+                return True
+                
+            except Exception as e:
+                self.logger.error(f"Failed to load or test model: {str(e)}")
+                self.model = None
+                return False
             
         except Exception as e:
-            self.logger.error(f"Error loading local model: {str(e)}")
+            self.logger.error(f"Error in model loading process: {str(e)}")
             return False
     
     def _load_cloud_model(self, model_name: str, api_key: Optional[str]) -> bool:

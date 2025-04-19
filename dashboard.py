@@ -323,21 +323,10 @@ class ModelManager:
             "total_memory": psutil.virtual_memory().total / (1024**3),  # GB
             "available_memory": psutil.virtual_memory().available / (1024**3),  # GB
             "cpu_count": psutil.cpu_count(),
-            "has_metal": False,
-            "has_mps": False,
             "has_cuda": torch.cuda.is_available(),
+            "has_mps": hasattr(torch.backends, "mps") and torch.backends.mps.is_available(),
             "recommended_device": "cpu"
         }
-        
-        # Check for Apple Silicon and Metal support
-        if info["architecture"] == "arm64" and platform.system() == "Darwin":
-            info["has_metal"] = True
-            try:
-                if torch.backends.mps.is_available():
-                    info["has_mps"] = True
-                    info["recommended_device"] = "mps"
-            except:
-                pass
         
         # Set device priority
         if info["has_cuda"]:
@@ -347,101 +336,47 @@ class ModelManager:
         
         return info
     
-    def _discover_models(self) -> Dict[str, Dict]:
-        """Discover available models with hardware-specific configurations."""
-        models = {}
-        models_dir = Path("models")
-        
-        if not models_dir.exists():
-            return models
-        
-        # Check code-llama directory
-        llama_dir = models_dir / "code-llama"
-        if llama_dir.is_dir():
-            config_file = llama_dir / "config.yaml"
-            if config_file.exists():
-                try:
-                    with open(config_file) as f:
-                        config = yaml.safe_load(f)
-                    
-                    # Validate required files
-                    has_all_files = all(
-                        (llama_dir / file).exists()
-                        for file in config.get("model_files", [])
-                    )
-                    
-                    if has_all_files:
-                        # Determine optimal configuration based on hardware
-                        device = self.hardware_info["recommended_device"]
-                        memory_config = self._get_memory_config()
-                        
-                        models["Code Llama 13B"] = {
-                            "path": str(llama_dir),
-                            "status": "available",
-                            "type": "local",
-                            "device": device.upper(),
-                            "config": {
-                                **config,
-                                **memory_config
-                            },
-                            "memory_usage": {
-                                "allocated": 0,
-                                "cached": 0
-                            }
-                        }
-                    else:
-                        st.error("Code Llama model files are incomplete. Please check installation.")
-                        
-                except Exception as e:
-                    st.error(f"Error loading Code Llama config: {str(e)}")
-        
-        # Add lightweight cloud models as fallback
-        cloud_models = {
-            "GPT-4": {
-                "type": "cloud",
-                "status": "available",
-                "requires_key": True,
-                "device": "Cloud",
-                "provider": "OpenAI",
-                "description": "OpenAI's most advanced model"
-            },
-            "Claude-instant": {
-                "type": "cloud",
-                "status": "available",
-                "requires_key": True,
-                "device": "Cloud",
-                "provider": "Anthropic",
-                "description": "Fast and efficient model"
-            }
-        }
-        models.update(cloud_models)
-        
-        return models
-    
     def _get_memory_config(self) -> Dict[str, Any]:
         """Get optimal memory configuration based on available resources."""
         available_gb = self.hardware_info["available_memory"]
         device = self.hardware_info["recommended_device"]
         
-        return {
+        # Base configuration
+        config = {
             "device": device,
-            "load_in_8bit": True,
-            "torch_dtype": "float16",
-            "device_map": device if device != "mps" else "auto",
-            "max_memory": {
-                device: f"{int(available_gb * 0.7)}GB" if device != "cpu" else f"{int(available_gb * 0.8)}GB",
-                "cpu": f"{int(available_gb * 0.2)}GB" if device != "cpu" else None
-            }
+            "load_in_8bit": True if device != "cpu" else False,
+            "torch_dtype": "float16" if device != "cpu" else "float32",
+            "device_map": "auto" if device in ["cuda", "mps"] else device
         }
+        
+        # Memory limits based on device
+        if device == "cuda":
+            config["max_memory"] = {
+                "cuda:0": f"{int(available_gb * 0.7)}GB",
+                "cpu": f"{int(available_gb * 0.2)}GB"
+            }
+        elif device == "mps":
+            config["max_memory"] = {
+                "mps": f"{int(available_gb * 0.7)}GB",
+                "cpu": f"{int(available_gb * 0.2)}GB"
+            }
+        else:
+            config["max_memory"] = {
+                "cpu": f"{int(available_gb * 0.8)}GB"
+            }
+        
+        return config
     
     def load_model(self, source: str, model_name: str, api_key: Optional[str] = None) -> bool:
         """Load a model for code refactoring."""
         try:
-            # Get memory configuration based on hardware
-            config = self._get_memory_config()
-            device = config.pop("device")  # Remove device from config dict
+            st.info(f"Loading model {model_name} on {self.hardware_info['recommended_device']}...")
             
-            # Load model with hardware optimization
+            # Get memory configuration
+            config = self._get_memory_config()
+            device = config.pop("device")
+            
+            # Initialize model loading
             success = self.engine.load_model(
                 source=source,
                 model_name=model_name,
@@ -451,22 +386,80 @@ class ModelManager:
             )
             
             if success:
+                self.model_loaded = True
                 self.current_model = {
                     "name": model_name,
                     "source": source,
                     "status": "active",
                     "device": device,
-                    "memory_config": config
+                    "config": config
                 }
                 st.success(f"✅ Model {model_name} loaded successfully on {device.upper()}")
             else:
                 st.error(f"Failed to load model {model_name}")
+                self.model_loaded = False
+                self.current_model = None
             
             return success
             
         except Exception as e:
             st.error(f"Error loading model: {str(e)}")
+            self.model_loaded = False
+            self.current_model = None
             return False
+    
+    def _discover_models(self) -> Dict[str, Dict]:
+        """Discover available models with hardware-specific configurations."""
+        models = {}
+        
+        # Check for local models
+        models_dir = Path("models")
+        if models_dir.exists():
+            llama_dir = models_dir / "code-llama"
+            if llama_dir.is_dir():
+                config_file = llama_dir / "config.yaml"
+                if config_file.exists():
+                    try:
+                        with open(config_file) as f:
+                            config = yaml.safe_load(f)
+                        
+                        # Check for model files
+                        model_files = list(llama_dir.glob("*.bin")) + list(llama_dir.glob("*.pt"))
+                        if model_files:
+                            device = self.hardware_info["recommended_device"]
+                            models["Code Llama 13B"] = {
+                                "name": "Code Llama 13B",
+                                "path": str(llama_dir),
+                                "type": "local",
+                                "status": "available",
+                                "device": device,
+                                "size_gb": sum(f.stat().st_size / (1024**3) for f in model_files),
+                                "files": [str(f) for f in model_files],
+                                "config": config
+                            }
+                    except Exception as e:
+                        st.error(f"Error loading model config: {str(e)}")
+        
+        # Add cloud models
+        cloud_models = {
+            "GPT-4": {
+                "name": "GPT-4",
+                "type": "cloud",
+                "provider": "OpenAI",
+                "status": "available",
+                "requires_key": True
+            },
+            "Claude-2": {
+                "name": "Claude-2",
+                "type": "cloud",
+                "provider": "Anthropic",
+                "status": "available",
+                "requires_key": True
+            }
+        }
+        models.update(cloud_models)
+        
+        return models
     
     def get_model_status(self, model_name: str) -> Dict:
         """Get current status of a model."""
