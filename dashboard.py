@@ -126,43 +126,114 @@ class ProjectManager:
             st.error(f"Error loading project: {str(e)}")
             return False
     
-    def load_from_github(self, repo_url: str, branch: str) -> bool:
-        """Load project from GitHub repository."""
+    def load_from_github(self, repo_url: str, branch: str = "main") -> bool:
+        """Load project from GitHub repository.
+        
+        Args:
+            repo_url (str): GitHub repository URL (e.g., 'https://github.com/user/repo')
+            branch (str, optional): Repository branch name. Defaults to "main".
+            
+        Returns:
+            bool: True if repository was successfully loaded, False otherwise.
+        """
         try:
-            # Extract owner and repo name from URL
-            match = re.match(r'https://github\.com/([^/]+)/([^/]+)', repo_url)
+            # Validate and parse GitHub URL
+            url_pattern = r'^https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$'
+            match = re.match(url_pattern, repo_url)
             if not match:
-                st.error("Invalid GitHub URL format")
+                st.error(
+                    "Invalid GitHub URL format. Please use: https://github.com/username/repository"
+                )
                 return False
-                
+            
             owner, repo = match.groups()
             
-            # Create temp directory
-            temp_dir = tempfile.mkdtemp()
-            self.project_path = Path(temp_dir)
+            # Construct the ZIP download URL
+            zip_url = f"https://github.com/{owner}/{repo}/archive/refs/heads/{branch}.zip"
             
-            # Download ZIP from GitHub
-            zip_url = f"https://github.com/{owner}/{repo}/archive/{branch}.zip"
-            response = requests.get(zip_url, stream=True)
-            
-            if response.status_code != 200:
-                st.error(f"Failed to download repository: {response.status_code}")
+            # Download repository with timeout and stream settings
+            try:
+                response = requests.get(
+                    zip_url,
+                    stream=True,
+                    timeout=30,
+                    headers={'User-Agent': 'Mozilla/5.0'}  # Some GitHub API requires user agent
+                )
+                
+                # Handle HTTP errors
+                if response.status_code == 404:
+                    st.error(
+                        f"Repository or branch not found: {owner}/{repo}:{branch}\n"
+                        "Please check that:\n"
+                        "- The repository exists and is public\n"
+                        "- The branch name is correct\n"
+                        "- You have the necessary permissions"
+                    )
+                    return False
+                elif response.status_code != 200:
+                    st.error(
+                        f"Failed to download repository. Status code: {response.status_code}\n"
+                        f"Error: {response.text[:200]}"  # Show first 200 chars of error
+                    )
+                    return False
+                
+                # Create temp directory and extract ZIP
+                temp_dir = tempfile.mkdtemp()
+                self.project_path = Path(temp_dir)
+                
+                with tempfile.NamedTemporaryFile() as temp_zip:
+                    # Download ZIP in chunks to handle large repos
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            temp_zip.write(chunk)
+                    temp_zip.flush()
+                    
+                    # Extract ZIP contents
+                    try:
+                        with zipfile.ZipFile(temp_zip.name) as zip_ref:
+                            zip_ref.extractall(temp_dir)
+                    except zipfile.BadZipFile:
+                        st.error(
+                            "The downloaded file is not a valid ZIP archive.\n"
+                            "This might happen if the repository is empty or the response was an error page."
+                        )
+                        return False
+                
+                # Update project metadata
+                self.project_metadata.update({
+                    "name": f"{owner}/{repo}",
+                    "source": "GitHub",
+                    "branch": branch,
+                    "upload_time": datetime.now(),
+                    "repo_url": repo_url
+                })
+                
+                # Scan for Java files
+                self._scan_java_files()
+                
+                if self.project_metadata["file_count"] == 0:
+                    st.warning(
+                        "Repository was downloaded successfully, but no Java files were found.\n"
+                        "Make sure the repository contains .java files in the specified branch."
+                    )
+                
+                return True
+                
+            except requests.Timeout:
+                st.error(
+                    "Connection timed out while downloading repository.\n"
+                    "Please check your internet connection and try again."
+                )
                 return False
-                
-            # Extract ZIP
-            with zipfile.ZipFile(io.BytesIO(response.content)) as zip_ref:
-                zip_ref.extractall(temp_dir)
-                
-            # Update project metadata
-            self.project_metadata["name"] = f"{owner}/{repo}"
-            self.project_metadata["source"] = "GitHub"
-            self.project_metadata["upload_time"] = datetime.now()
+            except requests.ConnectionError:
+                st.error(
+                    "Failed to connect to GitHub.\n"
+                    "Please check your internet connection and try again."
+                )
+                return False
             
-            # Scan for Java files
-            self._scan_java_files()
-            return True
         except Exception as e:
-            st.error(f"Error loading from GitHub: {str(e)}")
+            st.error(f"An unexpected error occurred: {str(e)}")
             return False
     
     def load_individual_files(self, files: List) -> bool:
