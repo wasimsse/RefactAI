@@ -12,6 +12,8 @@ import time
 import re
 from datetime import datetime
 from smell_detector.detector import detect_smells
+from refactoring.engine import RefactoringEngine
+from refactoring.file_utils import RefactoringFileManager
 
 # TODO: Import your Java project analysis modules
 # from java_analyzer import JavaProjectAnalyzer
@@ -328,12 +330,27 @@ if 'project_manager' not in st.session_state:
 if 'model_manager' not in st.session_state:
     st.session_state.model_manager = ModelManager()
 
+# Initialize refactoring components in session state
+if 'refactor_model' not in st.session_state:
+    st.session_state.refactor_model = None
+if 'refactoring_engine' not in st.session_state:
+    st.session_state.refactoring_engine = RefactoringEngine()
+if 'refactoring_manager' not in st.session_state:
+    st.session_state.refactoring_manager = RefactoringFileManager()
+if 'refactored_paths' not in st.session_state:
+    st.session_state.refactored_paths = {}
+
 def render_sidebar():
     """Render the sidebar with model selection and configuration options."""
     with st.sidebar:
         st.title("⚙️ Configuration")
         
-        # Model Source Selection
+        # Only show refactoring settings in refactoring tab
+        if st.session_state.get("current_tab") == "🛠️ Refactoring":
+            render_refactoring_sidebar()
+            return
+        
+        # Original sidebar content for other tabs
         model_source = st.selectbox(
             "Model Source",
             ["Local", "Cloud", "Private Cloud"],
@@ -388,6 +405,41 @@ def render_sidebar():
         )
         
         return selected_smells, mode
+
+def render_refactoring_sidebar():
+    """Render refactoring-specific sidebar content."""
+    st.sidebar.markdown("### 🛠️ Refactoring Settings")
+    
+    # Model source selection
+    model_source = st.sidebar.selectbox(
+        "Model Source",
+        ["Local", "Cloud", "Private Cloud"],
+        key="refactor_model_source"
+    )
+    
+    if model_source == "Local":
+        model_name = st.sidebar.selectbox(
+            "Select Model",
+            ["StarCoder 7B", "Code Llama 13B", "DeepSeek 6.7B"],
+            key="refactor_model_name"
+        )
+        if st.sidebar.button("Load Model"):
+            with st.spinner("Loading model..."):
+                if st.session_state.refactoring_engine.load_model(model_source, model_name):
+                    st.session_state.refactor_model = model_name
+                    st.sidebar.success(f"✅ {model_name} loaded")
+                else:
+                    st.sidebar.error("Failed to load model")
+    else:
+        api_key = st.sidebar.text_input("API Key", type="password")
+        model_name = st.sidebar.text_input("Model Name")
+        if st.sidebar.button("Load Model"):
+            with st.spinner("Loading model..."):
+                if st.session_state.refactoring_engine.load_model(model_source, api_key):
+                    st.session_state.refactor_model = model_name
+                    st.sidebar.success(f"✅ {model_name} loaded")
+                else:
+                    st.sidebar.error("Failed to load model")
 
 def render_home_tab():
     """Render the Home tab content."""
@@ -1185,6 +1237,35 @@ def render_detection_tab():
                         # Detected Smells Section with enhanced visualization
                         st.markdown("##### 🚨 Detected Code Smells")
                         if st.session_state.analysis_results["smells"]:
+                            # Custom CSS for better smell card styling
+                            st.markdown("""
+                            <style>
+                            .smell-card {
+                                background-color: #f8f9fa;
+                                border-radius: 0.5rem;
+                                padding: 1rem;
+                                margin-bottom: 1rem;
+                            }
+                            .smell-title {
+                                font-size: 1.2rem;
+                                font-weight: 600;
+                                margin-bottom: 0.5rem;
+                            }
+                            .smell-reason {
+                                font-style: italic;
+                                color: #495057;
+                                margin-bottom: 0.5rem;
+                            }
+                            .smell-metrics {
+                                background-color: #ffffff;
+                                border-radius: 0.3rem;
+                                padding: 0.5rem;
+                                font-size: 0.9rem;
+                                color: #666;
+                            }
+                            </style>
+                            """, unsafe_allow_html=True)
+
                             for smell in st.session_state.analysis_results["smells"]:
                                 smell_color = {
                                     "God Class": ("🔴", "#dc3545", "High complexity and low cohesion"),
@@ -1194,18 +1275,17 @@ def render_detection_tab():
                                     "Refused Bequest": ("🔵", "#0d6efd", "Inheritance misuse")
                                 }.get(smell, ("⚪", "#6c757d", ""))
                                 
-                                st.markdown(
-                                    f"### {smell_color[0]} {smell}"
-                                )
-                                st.markdown(
-                                    f"*{st.session_state.analysis_results['reasoning'][smell]}*"
-                                )
-                                st.markdown(
-                                    f"<div style='padding-left: 1rem; border-left: 4px solid {smell_color[1]}; margin: 1rem 0;'>"
-                                    f"<p style='color: #666; margin: 0;'>{smell_color[2]}</p>"
-                                    "</div>",
-                                    unsafe_allow_html=True
-                                )
+                                st.markdown(f"""
+                                <div class="smell-card" style="border-left: 4px solid {smell_color[1]}">
+                                    <div class="smell-title">{smell_color[0]} {smell}</div>
+                                    <div class="smell-reason">{st.session_state.analysis_results['reasoning'][smell]}</div>
+                                    <div class="smell-metrics">
+                                        <strong>Type:</strong> {smell_color[2]}<br>
+                                        <strong>Evidence:</strong><br>
+                                        {st.session_state.analysis_results.get('metrics_evidence', {}).get(smell, 'Detailed metrics analysis in progress...')}
+                                    </div>
+                                </div>
+                                """, unsafe_allow_html=True)
                         else:
                             st.success("✅ No code smells detected in this file")
                         
@@ -1234,53 +1314,130 @@ def render_refactoring_tab():
     """Render the Refactoring tab content."""
     st.title("🛠️ Code Refactoring")
     
+    # Check if project is loaded
     if not st.session_state.project_manager.project_path:
-        st.warning("Please upload a project first")
+        st.warning("⚠️ Please upload a project first in the Project Upload tab.")
         return
     
-    # Class Selection
-    selected_class = st.selectbox(
-        "Select Class to Refactor",
-        ["UserManager.java", "DataService.java", "Utils.java"]
+    # Get available Java files
+    java_files = st.session_state.project_manager.project_metadata.get("java_files", [])
+    if not java_files:
+        st.error("❌ No Java files found in the project.")
+        return
+    
+    # File selection
+    selected_file = st.selectbox(
+        "Select a file to refactor",
+        options=java_files,
+        format_func=lambda x: x["path"],
+        key="refactor_file_selector"
     )
     
-    # Code Display
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("### Original Code")
-        # TODO: Implement real code loading
-        st.code("""
-public class UserManager {
-    // Original implementation
-}
-        """, language="java")
-        
-    with col2:
-        st.markdown("### Refactored Code")
-        refactored_code = st.text_area(
-            "Edit refactored code",
-            value="""
-public class UserManager {
-    // Refactored implementation
-}
-            """,
-            height=300
-        )
-    
-    # Action Buttons
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if st.button("✨ Apply Refactoring"):
-            # TODO: Implement real refactoring application
-            st.success("Refactoring applied!")
-    with col2:
-        if st.button("↩️ Revert Changes"):
-            # TODO: Implement real change reversion
-            st.success("Changes reverted!")
-    with col3:
-        if st.button("💾 Save to File"):
-            # TODO: Implement real file saving
-            st.success("Changes saved!")
+    if selected_file:
+        try:
+            # Read original file content
+            with open(selected_file["full_path"], 'r', encoding='utf-8') as f:
+                original_code = f.read()
+            
+            # Create two columns for original and refactored code
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("### Original Code")
+                st.code(original_code, language="java")
+            
+            with col2:
+                st.markdown("### Refactored Code")
+                if selected_file["path"] in st.session_state.refactored_paths:
+                    # Load previously refactored code
+                    refactored_path = st.session_state.refactored_paths[selected_file["path"]]
+                    with open(refactored_path, 'r', encoding='utf-8') as f:
+                        refactored_code = f.read()
+                else:
+                    refactored_code = original_code
+                
+                refactored_code = st.text_area(
+                    "Edit refactored code",
+                    value=refactored_code,
+                    height=400,
+                    key="refactored_code"
+                )
+            
+            # Action buttons
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                if st.button("💡 Generate Refactoring"):
+                    if not st.session_state.refactor_model:
+                        st.error("⚠️ Please load a model first")
+                        return
+                    
+                    with st.spinner("Generating refactored code..."):
+                        # Get detected smells for this file
+                        smells = st.session_state.analysis_results.get(
+                            selected_file["name"], {}
+                        ).get("smells", [])
+                        
+                        # Generate refactoring
+                        refactored_code, metadata = st.session_state.refactoring_engine.refactor_code(
+                            original_code,
+                            smells
+                        )
+                        
+                        if metadata.get("success"):
+                            st.session_state.refactored_code = refactored_code
+                            st.success("✅ Refactoring generated!")
+                        else:
+                            st.error(f"❌ Error: {metadata.get('error', 'Unknown error')}")
+            
+            with col2:
+                if st.button("✅ Apply Refactoring"):
+                    with st.spinner("Saving refactored code..."):
+                        # Save refactored code
+                        result = st.session_state.refactoring_manager.save_refactored_file(
+                            selected_file["full_path"],
+                            refactored_code,
+                            {"source_file": selected_file["path"]}
+                        )
+                        
+                        if result.get("success", True):
+                            st.session_state.refactored_paths[selected_file["path"]] = result["refactored_path"]
+                            st.success("✅ Refactoring applied and saved!")
+                            st.toast(f"Saved to: {result['refactored_path']}")
+                        else:
+                            st.error(f"❌ Error: {result.get('error', 'Unknown error')}")
+            
+            with col3:
+                if st.button("📥 Download Refactored Project"):
+                    with st.spinner("Creating ZIP file..."):
+                        zip_path = st.session_state.refactoring_manager.create_zip_output()
+                        if zip_path:
+                            with open(zip_path, 'rb') as f:
+                                st.download_button(
+                                    "💾 Download ZIP",
+                                    f,
+                                    file_name="refactored_project.zip",
+                                    mime="application/zip"
+                                )
+                        else:
+                            st.error("❌ Error creating ZIP file")
+            
+            # Show refactoring history
+            with st.expander("📋 Refactoring History"):
+                history = st.session_state.refactoring_manager.get_refactored_files()
+                if history["refactorings"]:
+                    for ref in history["refactorings"]:
+                        st.markdown(f"""
+                        **File:** {ref['source_file']}  
+                        **Time:** {ref['timestamp']}  
+                        **Status:** ✅ Success
+                        """)
+                else:
+                    st.info("No refactoring history yet")
+            
+        except Exception as e:
+            st.error(f"❌ Error: {str(e)}")
+            return
 
 def render_testing_tab():
     """Render the Testing & Metrics tab content."""
@@ -1331,6 +1488,10 @@ def render_testing_tab():
 
 def main():
     """Main function to run the Streamlit dashboard."""
+    # Store current tab in session state
+    if "current_tab" not in st.session_state:
+        st.session_state.current_tab = "🏠 Home"
+    
     # Render sidebar and get configuration
     selected_smells, refactoring_mode = render_sidebar()
     
@@ -1342,6 +1503,11 @@ def main():
         "🛠️ Refactoring",
         "🧪 Testing & Metrics"
     ])
+    
+    # Update current tab
+    for i, tab in enumerate(["🏠 Home", "📂 Project Upload", "🔍 Smell Detection", "🛠️ Refactoring", "🧪 Testing & Metrics"]):
+        if tabs[i].selected:
+            st.session_state.current_tab = tab
     
     # Render tab contents
     with tabs[0]:
