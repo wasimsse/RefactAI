@@ -11,12 +11,28 @@ import io
 import time
 import re
 from datetime import datetime
-from smell_detector.detector import detect_smells
-from refactoring.engine import RefactoringEngine
-from refactoring.file_utils import RefactoringFileManager
+import logging
+import psutil
 import torch
 import yaml
 from contextlib import contextmanager
+from smell_detector.detector import detect_smells
+from refactoring.engine import RefactoringEngine
+from refactoring.file_utils import RefactoringFileManager
+
+# Configure root logger
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+# Disable unnecessary warnings
+logging.getLogger("transformers").setLevel(logging.ERROR)
+logging.getLogger("torch").setLevel(logging.ERROR)
+
+# Create logger for this module
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 # TODO: Import your Java project analysis modules
 # from java_analyzer import JavaProjectAnalyzer
@@ -307,6 +323,20 @@ class ModelManager:
         self.current_model = None
         self.model_loaded = False
         self.hardware_info = self._detect_hardware()
+        
+        # Initialize logger
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.INFO)
+        if not self.logger.handlers:
+            handler = logging.StreamHandler()
+            handler.setFormatter(logging.Formatter(
+                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            ))
+            self.logger.addHandler(handler)
+        
+        self.logger.info("Initializing ModelManager...")
+        self.logger.info(f"Hardware info: {self.hardware_info}")
+        
         self.available_models = self._discover_models()
         self.resource_monitor = ResourceMonitor()
     
@@ -341,75 +371,153 @@ class ModelManager:
         available_gb = self.hardware_info["available_memory"]
         device = self.hardware_info["recommended_device"]
         
+        self.logger.info(f"Configuring memory for device: {device}")
+        self.logger.info(f"Available memory: {available_gb:.2f} GB")
+        
         # Base configuration
         config = {
             "device": device,
-            "load_in_8bit": True if device != "cpu" else False,
-            "torch_dtype": "float16" if device != "cpu" else "float32",
-            "device_map": "auto" if device in ["cuda", "mps"] else device
+            "load_in_8bit": False,  # Default to False for better compatibility
+            "torch_dtype": torch.float32,  # Default to float32 for better compatibility
+            "device_map": None,  # Start with None for manual device management
+            "low_cpu_mem_usage": True
         }
         
-        # Memory limits based on device
+        # Device-specific configurations
         if device == "cuda":
-            config["max_memory"] = {
-                "cuda:0": f"{int(available_gb * 0.7)}GB",
-                "cpu": f"{int(available_gb * 0.2)}GB"
-            }
+            self.logger.info("Applying CUDA-specific configuration")
+            config.update({
+                "load_in_8bit": True,
+                "torch_dtype": torch.float16,
+                "device_map": "auto",
+                "max_memory": {
+                    "cuda:0": f"{int(available_gb * 0.7)}GB",
+                    "cpu": f"{int(available_gb * 0.2)}GB"
+                }
+            })
         elif device == "mps":
-            config["max_memory"] = {
-                "mps": f"{int(available_gb * 0.7)}GB",
-                "cpu": f"{int(available_gb * 0.2)}GB"
-            }
-        else:
-            config["max_memory"] = {
-                "cpu": f"{int(available_gb * 0.8)}GB"
-            }
+            self.logger.info("Applying MPS-specific configuration")
+            config.update({
+                "torch_dtype": torch.float32,  # MPS requires float32
+                "device_map": None,  # Manual device management for MPS
+                "max_memory": {
+                    "cpu": f"{int(available_gb * 0.5)}GB"  # Use CPU memory for MPS
+                }
+            })
+        else:  # CPU
+            self.logger.info("Applying CPU-specific configuration")
+            config.update({
+                "device_map": None,
+                "max_memory": {
+                    "cpu": f"{int(available_gb * 0.8)}GB"
+                }
+            })
         
+        self.logger.info(f"Final memory configuration: {config}")
         return config
     
     def load_model(self, source: str, model_name: str, api_key: Optional[str] = None) -> bool:
         """Load a model for code refactoring."""
         try:
-            st.info(f"Loading model {model_name} on {self.hardware_info['recommended_device']}...")
+            # Normalize source to lowercase
+            source = source.lower()
+            
+            # Log the loading attempt
+            self.logger.info(f"Attempting to load model {model_name} from {source}")
+            self.logger.info(f"Hardware info: {self.hardware_info}")
+            
+            # Validate model availability
+            if model_name not in self.available_models:
+                error_msg = f"Model {model_name} not found in available models"
+                self.logger.error(error_msg)
+                st.error(error_msg)
+                return False
+            
+            model_info = self.available_models[model_name]
+            self.logger.info(f"Model info: {model_info}")
             
             # Get memory configuration
             config = self._get_memory_config()
+            self.logger.info(f"Memory config: {config}")
+            
             device = config.pop("device")
             
-            # Initialize model loading
-            success = self.engine.load_model(
-                source=source,
-                model_name=model_name,
-                api_key=api_key,
-                device=device,
-                **config
-            )
+            # Special handling for MPS
+            if device == "mps":
+                self.logger.info("MPS device detected, applying special configurations")
+                config.update({
+                    "torch_dtype": torch.float32,
+                    "load_in_8bit": False,
+                    "device_map": None  # Force manual device management
+                })
             
-            if success:
-                self.model_loaded = True
-                self.current_model = {
-                    "name": model_name,
-                    "source": source,
-                    "status": "active",
-                    "device": device,
-                    "config": config
-                }
-                st.success(f"✅ Model {model_name} loaded successfully on {device.upper()}")
-            else:
-                st.error(f"Failed to load model {model_name}")
-                self.model_loaded = False
-                self.current_model = None
-            
-            return success
-            
+            # Initialize model loading with progress
+            with st.spinner(f"Loading model {model_name} on {device.upper()}..."):
+                # Log pre-loading state
+                self.logger.info("Pre-loading model state:")
+                self.logger.info(f"- Current device: {device}")
+                self.logger.info(f"- Available memory: {psutil.virtual_memory().available / (1024**3):.2f} GB")
+                
+                try:
+                    # Attempt model loading
+                    success = self.engine.load_model(
+                        source=source,
+                        model_name=model_name,
+                        api_key=api_key,
+                        device=device,
+                        **config
+                    )
+                    
+                    if success:
+                        self.model_loaded = True
+                        self.current_model = {
+                            "name": model_name,
+                            "source": source,
+                            "status": "active",
+                            "device": device,
+                            "config": config
+                        }
+                        success_msg = f"✅ Model {model_name} loaded successfully on {device.upper()}"
+                        self.logger.info(success_msg)
+                        st.success(success_msg)
+                    else:
+                        error_msg = f"Failed to load model {model_name}. Check the logs for details."
+                        self.logger.error(error_msg)
+                        # Display detailed error from engine logs if available
+                        for handler in self.logger.handlers:
+                            if isinstance(handler, logging.StreamHandler):
+                                log_messages = handler.stream.getvalue().split('\n')
+                                error_logs = [msg for msg in log_messages if "❌" in msg]
+                                if error_logs:
+                                    st.error("\n".join(error_logs))
+                                else:
+                                    st.error(error_msg)
+                        self.model_loaded = False
+                        self.current_model = None
+                    
+                    return success
+                    
+                except Exception as e:
+                    error_msg = f"Error during model loading: {str(e)}"
+                    self.logger.error(error_msg, exc_info=True)
+                    st.error(error_msg)
+                    if hasattr(e, 'args'):
+                        st.error(f"Additional error details: {e.args}")
+                    self.model_loaded = False
+                    self.current_model = None
+                    return False
+                
         except Exception as e:
-            st.error(f"Error loading model: {str(e)}")
+            error_msg = f"Error loading model: {str(e)}"
+            self.logger.error(error_msg, exc_info=True)
+            st.error(error_msg)
             self.model_loaded = False
             self.current_model = None
             return False
     
     def _discover_models(self) -> Dict[str, Dict]:
         """Discover available models with hardware-specific configurations."""
+        self.logger.info("Starting model discovery")
         models = {}
         
         # Check for local models
@@ -423,22 +531,51 @@ class ModelManager:
                         with open(config_file) as f:
                             config = yaml.safe_load(f)
                         
-                        # Check for model files
-                        model_files = list(llama_dir.glob("*.bin")) + list(llama_dir.glob("*.pt"))
-                        if model_files:
-                            device = self.hardware_info["recommended_device"]
-                            models["Code Llama 13B"] = {
-                                "name": "Code Llama 13B",
-                                "path": str(llama_dir),
-                                "type": "local",
-                                "status": "available",
-                                "device": device,
-                                "size_gb": sum(f.stat().st_size / (1024**3) for f in model_files),
-                                "files": [str(f) for f in model_files],
-                                "config": config
-                            }
+                        self.logger.info(f"Found config file: {config}")
+                        
+                        # Verify required model files from config
+                        required_files = config.get("model_files", [])
+                        missing_files = []
+                        for file in required_files:
+                            if not (llama_dir / file).exists():
+                                missing_files.append(file)
+                        
+                        if missing_files:
+                            self.logger.warning(f"Missing model files: {missing_files}")
+                            return models
+                        
+                        # All files exist
+                        model_files = [llama_dir / file for file in required_files]
+                        device = self.hardware_info["recommended_device"]
+                        
+                        models["Code Llama 13B"] = {
+                            "name": "Code Llama 13B",
+                            "path": str(llama_dir),
+                            "type": "local",
+                            "status": "available",
+                            "device": device,
+                            "model_format": "bin",
+                            "size_gb": sum(f.stat().st_size / (1024**3) for f in model_files),
+                            "files": [str(f) for f in model_files],
+                            "config": config,
+                            "memory_config": self._get_memory_config()
+                        }
+                        
+                        self.logger.info(
+                            f"Found Code Llama 13B model:\n"
+                            f"- Device: {device}\n"
+                            f"- Files: {len(model_files)}\n"
+                            f"- Total size: {models['Code Llama 13B']['size_gb']:.1f} GB"
+                        )
                     except Exception as e:
-                        st.error(f"Error loading model config: {str(e)}")
+                        self.logger.error(f"Error loading model config: {str(e)}", exc_info=True)
+                        return models
+                else:
+                    self.logger.warning(f"Config file not found: {config_file}")
+            else:
+                self.logger.warning(f"Model directory not found: {llama_dir}")
+        else:
+            self.logger.warning(f"Models directory not found: {models_dir}")
         
         # Add cloud models
         cloud_models = {
@@ -459,6 +596,7 @@ class ModelManager:
         }
         models.update(cloud_models)
         
+        self.logger.info(f"Total models discovered: {len(models)}")
         return models
     
     def get_model_status(self, model_name: str) -> Dict:

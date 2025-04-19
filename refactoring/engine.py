@@ -357,133 +357,108 @@ class RefactoringEngine:
         self.memory_config = {}
         self.logger = logging.getLogger(__name__)
     
-    def load_model(self, source: str, model_name: str, api_key: Optional[str] = None, 
-                  device: str = "cpu", **memory_config) -> bool:
-        """Load a model for code refactoring.
-        
-        Args:
-            source: Model source ('local' or 'cloud')
-            model_name: Name of the model to load
-            api_key: API key for cloud models
-            device: Device to load the model on ('cpu', 'cuda', or 'mps')
-            **memory_config: Additional memory configuration parameters
-        """
+    def _load_local_model(self, model_name: str) -> Tuple[bool, Optional[str]]:
+        """Load a local model with proper device and memory configuration."""
         try:
-            self.device = device
-            self.memory_config = memory_config
-            self.logger.info(f"Loading model {model_name} on device {device} with config: {memory_config}")
+            # Get model path from registry
+            models_dir = Path("models")
+            model_path = models_dir / "code-llama"
             
-            if source == "local":
-                return self._load_local_model(model_name)
-            elif source == "cloud":
-                return self._load_cloud_model(model_name, api_key)
-            else:
-                self.logger.error(f"Unknown model source: {source}")
-                return False
-                
-        except Exception as e:
-            self.logger.error(f"Error loading model: {str(e)}")
-            return False
-    
-    def _load_local_model(self, model_name: str) -> bool:
-        """Load a local model."""
-        try:
-            # Map friendly names to model IDs
-            model_map = {
-                "Code Llama 13B": "codellama/CodeLlama-13b-hf",
-                "StarCoder": "bigcode/starcoder",
-                "DeepSeek": "deepseek-ai/deepseek-coder-6.7b-base"
-            }
+            if not model_path.exists():
+                return False, f"❌ Model directory not found: {model_path}"
             
-            model_id = model_map.get(model_name)
-            if not model_id:
-                self.logger.error(f"Unknown model: {model_name}")
-                return False
+            # Load config
+            config_file = model_path / "config.yaml"
+            if not config_file.exists():
+                return False, f"❌ Model config not found: {config_file}"
             
-            # Load tokenizer first
+            with open(config_file) as f:
+                config = yaml.safe_load(f)
+            
+            # Verify model files
+            required_files = config.get("model_files", [])
+            missing_files = []
+            for file in required_files:
+                if not (model_path / file).exists():
+                    missing_files.append(file)
+            
+            if missing_files:
+                return False, f"❌ Missing model files: {', '.join(missing_files)}"
+            
+            # Initialize tokenizer with safe settings
             try:
-                self.logger.info(f"Loading tokenizer for {model_id}")
                 self.tokenizer = AutoTokenizer.from_pretrained(
-                    model_id,
+                    str(model_path),
                     trust_remote_code=True,
-                    use_fast=True
+                    use_fast=False,  # Disable fast tokenizer for better compatibility
+                    padding_side="left"
                 )
             except Exception as e:
-                self.logger.error(f"Failed to load tokenizer: {str(e)}")
-                return False
+                return False, f"❌ Failed to load tokenizer: {str(e)}"
             
-            # Prepare device configuration
-            device_config = {
-                "device_map": "auto" if self.device in ["cuda", "mps"] else self.device,
-                "torch_dtype": getattr(torch, self.memory_config.get("torch_dtype", "float16")),
-                "trust_remote_code": True
+            # Update memory config with model-specific settings
+            model_config = {
+                "torch_dtype": getattr(torch, self.memory_config.get("torch_dtype", "float32").__class__.__name__),
+                "device_map": self.memory_config.get("device_map"),
+                "load_in_8bit": self.memory_config.get("load_in_8bit", False),
+                "load_in_4bit": self.memory_config.get("load_in_4bit", False)
             }
             
-            # Add quantization options
-            if self.memory_config.get("load_in_8bit"):
-                device_config["load_in_8bit"] = True
-                try:
-                    import bitsandbytes
-                    self.logger.info("8-bit quantization enabled")
-                except ImportError:
-                    self.logger.warning("bitsandbytes not installed, falling back to full precision")
-                    device_config["load_in_8bit"] = False
+            # Special handling for MPS
+            if self.device == "mps":
+                model_config.update({
+                    "device_map": None,  # Force manual device management
+                    "torch_dtype": torch.float32,
+                    "load_in_8bit": False,
+                    "load_in_4bit": False
+                })
+                os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
             
-            # Add memory limits if specified
-            if "max_memory" in self.memory_config:
-                device_config["max_memory"] = self.memory_config["max_memory"]
-            
-            # Load the model
-            self.logger.info(f"Loading model {model_id} with config: {device_config}")
+            # Load model with updated config
             try:
                 self.model = AutoModelForCausalLM.from_pretrained(
-                    model_id,
-                    **device_config
+                    str(model_path),
+                    trust_remote_code=True,
+                    use_safetensors=True,  # Prefer safetensors format
+                    **model_config
                 )
                 
-                # Move model to device if needed
-                if self.device not in ["auto", None] and not device_config.get("device_map"):
-                    self.logger.info(f"Moving model to {self.device}")
+                # Move model to device if not using device_map
+                if model_config["device_map"] is None and self.device != "cpu":
                     self.model = self.model.to(self.device)
                 
-                # Set model to evaluation mode
-                self.model.eval()
+                self.model.eval()  # Set to evaluation mode
+                self.model_name = model_name
                 
-                # Test the model with a simple input
-                self.logger.info("Testing model with sample input")
-                test_input = self.tokenizer("def test():", return_tensors="pt")
-                if self.device != "cpu":
-                    test_input = {k: v.to(self.device) for k, v in test_input.items()}
+                # Test model with a simple prompt
+                test_prompt = "def test():"
+                inputs = self.tokenizer(test_prompt, return_tensors="pt")
+                if model_config["device_map"] is None:
+                    inputs = {k: v.to(self.device) for k, v in inputs.items()}
                 
                 with torch.no_grad():
                     _ = self.model.generate(
-                        test_input["input_ids"],
-                        max_length=20,
-                        num_return_sequences=1
+                        inputs["input_ids"],
+                        max_length=10,
+                        temperature=0.7,
+                        top_p=0.95
                     )
                 
-                self.model_name = model_name
-                self.logger.info(f"Model loaded and tested successfully on {self.device}")
-                return True
+                return True, None
                 
             except Exception as e:
-                self.logger.error(f"Failed to load or test model: {str(e)}")
-                self.model = None
-                return False
-            
+                return False, f"❌ Failed to load model: {str(e)}"
+                
         except Exception as e:
-            self.logger.error(f"Error in model loading process: {str(e)}")
-            return False
-    
-    def _load_cloud_model(self, model_name: str, api_key: Optional[str]) -> bool:
+            return False, f"❌ Error in _load_local_model: {str(e)}"
+
+    def _load_cloud_model(self, model_name: str, api_key: Optional[str] = None) -> bool:
         """Load a cloud model."""
         try:
-            # Validate API key
             if not api_key:
                 self.logger.error("API key required for cloud models")
                 return False
             
-            # Store API key for later use
             self.api_key = api_key
             self.model_name = model_name
             return True
@@ -491,6 +466,34 @@ class RefactoringEngine:
         except Exception as e:
             self.logger.error(f"Error loading cloud model: {str(e)}")
             return False
+            
+    def load_model(self, source: str, model_name: str, api_key: Optional[str] = None, 
+                  device: str = "cpu", **memory_config) -> Tuple[bool, Optional[str]]:
+        """Load a model for code refactoring."""
+        try:
+            self.device = device
+            self.memory_config = memory_config
+            self.logger = logging.getLogger(__name__)
+            
+            # Log configuration
+            self.logger.info(f"Loading model {model_name} from {source}")
+            self.logger.info(f"Device: {device}")
+            self.logger.info(f"Memory config: {memory_config}")
+            
+            # Normalize source
+            source = source.lower()
+            
+            # Handle different model sources
+            if source == "local":
+                return self._load_local_model(model_name)
+            elif source == "cloud":
+                return self._load_cloud_model(model_name, api_key)
+            else:
+                return False, f"❌ Unknown model source: {source}"
+                
+        except Exception as e:
+            self.logger.error(f"Error in load_model: {str(e)}", exc_info=True)
+            return False, f"❌ Error in load_model: {str(e)}"
     
     def refactor_code(self, code: str, smells: List[str]) -> Tuple[str, Dict]:
         """Refactor code to address specified smells."""
