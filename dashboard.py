@@ -14,6 +14,9 @@ from datetime import datetime
 from smell_detector.detector import detect_smells
 from refactoring.engine import RefactoringEngine
 from refactoring.file_utils import RefactoringFileManager
+import torch
+import yaml
+from contextlib import contextmanager
 
 # TODO: Import your Java project analysis modules
 # from java_analyzer import JavaProjectAnalyzer
@@ -298,31 +301,276 @@ class ProjectManager:
                     self.project_metadata["total_size"] += file_size
 
 class ModelManager:
-    """Manages LLM model loading and operations."""
+    """Manages LLM model loading and inference with hardware optimization."""
     def __init__(self):
-        self.model = None
-        self.model_source = "Local"
-        self.model_name = "Code Llama 13B"
+        self.engine = RefactoringEngine()
+        self.current_model = None
+        self.model_loaded = False
+        self.hardware_info = self._detect_hardware()
+        self.available_models = self._discover_models()
+        self.resource_monitor = ResourceMonitor()
+    
+    def _detect_hardware(self) -> Dict[str, Any]:
+        """Detect available hardware capabilities."""
+        import platform
+        import torch
+        import psutil
+        
+        info = {
+            "platform": platform.platform(),
+            "processor": platform.processor(),
+            "architecture": platform.machine(),
+            "total_memory": psutil.virtual_memory().total / (1024**3),  # GB
+            "available_memory": psutil.virtual_memory().available / (1024**3),  # GB
+            "cpu_count": psutil.cpu_count(),
+            "has_metal": False,
+            "has_mps": False,
+            "has_cuda": torch.cuda.is_available(),
+            "recommended_device": "cpu"
+        }
+        
+        # Check for Apple Silicon and Metal support
+        if info["architecture"] == "arm64" and platform.system() == "Darwin":
+            info["has_metal"] = True
+            try:
+                if torch.backends.mps.is_available():
+                    info["has_mps"] = True
+                    info["recommended_device"] = "mps"
+            except:
+                pass
+        
+        # Set device priority
+        if info["has_cuda"]:
+            info["recommended_device"] = "cuda"
+        elif info["has_mps"]:
+            info["recommended_device"] = "mps"
+        
+        return info
+    
+    def _discover_models(self) -> Dict[str, Dict]:
+        """Discover available models with hardware-specific configurations."""
+        models = {}
+        models_dir = Path("models")
+        
+        if not models_dir.exists():
+            return models
+        
+        # Check code-llama directory
+        llama_dir = models_dir / "code-llama"
+        if llama_dir.is_dir():
+            config_file = llama_dir / "config.yaml"
+            if config_file.exists():
+                try:
+                    with open(config_file) as f:
+                        config = yaml.safe_load(f)
+                    
+                    # Validate required files
+                    has_all_files = all(
+                        (llama_dir / file).exists()
+                        for file in config.get("model_files", [])
+                    )
+                    
+                    if has_all_files:
+                        # Determine optimal configuration based on hardware
+                        device = self.hardware_info["recommended_device"]
+                        memory_config = self._get_memory_config()
+                        
+                        models["Code Llama 13B"] = {
+                            "path": str(llama_dir),
+                            "status": "available",
+                            "type": "local",
+                            "device": device.upper(),
+                            "config": {
+                                **config,
+                                **memory_config
+                            },
+                            "memory_usage": {
+                                "allocated": 0,
+                                "cached": 0
+                            }
+                        }
+                    else:
+                        st.error("Code Llama model files are incomplete. Please check installation.")
+                        
+                except Exception as e:
+                    st.error(f"Error loading Code Llama config: {str(e)}")
+        
+        # Add lightweight cloud models as fallback
+        cloud_models = {
+            "GPT-4": {
+                "type": "cloud",
+                "status": "available",
+                "requires_key": True,
+                "device": "Cloud",
+                "provider": "OpenAI",
+                "description": "OpenAI's most advanced model"
+            },
+            "Claude-instant": {
+                "type": "cloud",
+                "status": "available",
+                "requires_key": True,
+                "device": "Cloud",
+                "provider": "Anthropic",
+                "description": "Fast and efficient model"
+            }
+        }
+        models.update(cloud_models)
+        
+        return models
+    
+    def _get_memory_config(self) -> Dict[str, Any]:
+        """Get optimal memory configuration based on available resources."""
+        available_gb = self.hardware_info["available_memory"]
+        device = self.hardware_info["recommended_device"]
+        
+        return {
+            "device": device,
+            "load_in_8bit": True,
+            "torch_dtype": "float16",
+            "device_map": device if device != "mps" else "auto",
+            "max_memory": {
+                device: f"{int(available_gb * 0.7)}GB" if device != "cpu" else f"{int(available_gb * 0.8)}GB",
+                "cpu": f"{int(available_gb * 0.2)}GB" if device != "cpu" else None
+            }
+        }
     
     def load_model(self, source: str, model_name: str, api_key: Optional[str] = None) -> bool:
-        """Load the specified model."""
+        """Load a model for code refactoring."""
         try:
-            # TODO: Implement real model loading logic
-            self.model_source = source
-            self.model_name = model_name
-            return True
+            # Get memory configuration based on hardware
+            config = self._get_memory_config()
+            device = config.pop("device")  # Remove device from config dict
+            
+            # Load model with hardware optimization
+            success = self.engine.load_model(
+                source=source,
+                model_name=model_name,
+                api_key=api_key,
+                device=device,
+                **config
+            )
+            
+            if success:
+                self.current_model = {
+                    "name": model_name,
+                    "source": source,
+                    "status": "active",
+                    "device": device,
+                    "memory_config": config
+                }
+                st.success(f"✅ Model {model_name} loaded successfully on {device.upper()}")
+            else:
+                st.error(f"Failed to load model {model_name}")
+            
+            return success
+            
         except Exception as e:
             st.error(f"Error loading model: {str(e)}")
             return False
     
-    def generate_refactoring(self, code: str, smell_type: str) -> str:
-        """Generate refactoring suggestions using the model."""
+    def get_model_status(self, model_name: str) -> Dict:
+        """Get current status of a model."""
+        if model_name in self.available_models:
+            return self.available_models[model_name]
+        return {"status": "unknown", "icon": "❓"}
+    
+    def generate_refactoring(self, code: str, smells: List[str]) -> Tuple[str, Dict]:
+        """Generate refactored code using the loaded model with resource monitoring."""
+        if not self.model_loaded:
+            raise RuntimeError("No model loaded. Please load a model first.")
+        
         try:
-            # TODO: Implement real refactoring generation
-            return code
+            # Check resources before generation
+            if not self.resource_monitor.check_resources():
+                raise RuntimeError("Insufficient resources for code generation")
+            
+            # Generate with resource monitoring
+            with self.resource_monitor.monitor_generation():
+                refactored_code, metadata = self.engine.refactor_code(code, smells)
+            
+            # Add resource usage to metadata
+            metadata["resource_usage"] = self.resource_monitor.get_generation_stats()
+            return refactored_code, metadata
+            
         except Exception as e:
-            st.error(f"Error generating refactoring: {str(e)}")
-            return code
+            st.error(f"Error during refactoring: {str(e)}")
+            return code, {"error": str(e), "success": False}
+
+class ResourceMonitor:
+    """Monitors and manages system resources."""
+    def __init__(self):
+        self.start_time = time.time()
+        self.generation_stats = {}
+    
+    def check_resources(self) -> bool:
+        """Check if sufficient resources are available."""
+        import psutil
+        
+        # Check memory
+        mem = psutil.virtual_memory()
+        if mem.available < 2 * 1024 * 1024 * 1024:  # 2GB minimum
+            return False
+        
+        # Check CPU usage
+        if psutil.cpu_percent(interval=1) > 90:
+            return False
+        
+        return True
+    
+    def update_usage(self):
+        """Update current resource usage statistics."""
+        import psutil
+        import torch
+        
+        self.current_usage = {
+            "memory": psutil.virtual_memory().percent,
+            "cpu": psutil.cpu_percent(),
+            "gpu": self._get_gpu_usage()
+        }
+    
+    def _get_gpu_usage(self) -> Dict[str, float]:
+        """Get GPU memory usage based on available hardware."""
+        try:
+            if torch.cuda.is_available():
+                return {
+                    "allocated": torch.cuda.memory_allocated() / 1024**3,
+                    "cached": torch.cuda.memory_reserved() / 1024**3
+                }
+            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                # Note: MPS doesn't provide direct memory stats
+                return {"mps": "active"}
+        except:
+            pass
+        return {}
+    
+    @contextmanager
+    def monitor_generation(self):
+        """Context manager to monitor resource usage during generation."""
+        start_time = time.time()
+        start_memory = psutil.virtual_memory().used
+        
+        try:
+            yield
+        finally:
+            end_time = time.time()
+            end_memory = psutil.virtual_memory().used
+            
+            self.generation_stats = {
+                "duration": end_time - start_time,
+                "memory_delta": (end_memory - start_memory) / 1024**2,  # MB
+                "peak_memory": psutil.virtual_memory().percent
+            }
+    
+    def get_memory_usage(self) -> Dict[str, float]:
+        """Get current memory usage statistics."""
+        return {
+            "system": psutil.virtual_memory().percent,
+            "gpu": self._get_gpu_usage()
+        }
+    
+    def get_generation_stats(self) -> Dict[str, float]:
+        """Get statistics from the last generation."""
+        return self.generation_stats
 
 # Initialize session state
 if 'project_manager' not in st.session_state:
@@ -361,7 +609,7 @@ def render_sidebar():
         if model_source == "Local":
             model = st.selectbox(
                 "Select Model",
-                ["Code Llama 13B", "StarCoder 7B", "DeepSeek 6.7B"],
+                ["Code Llama 13B"],
                 help="Choose a local model"
             )
             if st.button("Load Model"):
@@ -407,39 +655,110 @@ def render_sidebar():
         return selected_smells, mode
 
 def render_refactoring_sidebar():
-    """Render refactoring-specific sidebar content."""
-    st.sidebar.markdown("### 🛠️ Refactoring Settings")
+    """Render the refactoring configuration sidebar."""
+    st.sidebar.header("⚙️ Model Configuration")
     
     # Model source selection
     model_source = st.sidebar.selectbox(
         "Model Source",
-        ["Local", "Cloud", "Private Cloud"],
-        key="refactor_model_source"
+        options=["Local", "Cloud"],
+        help="Choose where to load the model from"
     )
     
-    if model_source == "Local":
-        model_name = st.sidebar.selectbox(
-            "Select Model",
-            ["StarCoder 7B", "Code Llama 13B", "DeepSeek 6.7B"],
-            key="refactor_model_name"
-        )
-        if st.sidebar.button("Load Model"):
-            with st.spinner("Loading model..."):
-                if st.session_state.refactoring_engine.load_model(model_source, model_name):
-                    st.session_state.refactor_model = model_name
-                    st.sidebar.success(f"✅ {model_name} loaded")
-                else:
-                    st.sidebar.error("Failed to load model")
-    else:
-        api_key = st.sidebar.text_input("API Key", type="password")
-        model_name = st.sidebar.text_input("Model Name")
-        if st.sidebar.button("Load Model"):
-            with st.spinner("Loading model..."):
-                if st.session_state.refactoring_engine.load_model(model_source, api_key):
-                    st.session_state.refactor_model = model_name
-                    st.sidebar.success(f"✅ {model_name} loaded")
-                else:
-                    st.sidebar.error("Failed to load model")
+    # Get available models based on source
+    model_manager = st.session_state.get('model_manager')
+    if not model_manager:
+        model_manager = ModelManager()
+        st.session_state['model_manager'] = model_manager
+    
+    # Filter models based on source
+    available_models = {
+        name: info for name, info in model_manager.available_models.items()
+        if info["type"].lower() == model_source.lower()
+    }
+    
+    if not available_models:
+        if model_source == "Local":
+            st.sidebar.error("No local models found. Please check models directory.")
+        else:
+            st.sidebar.info("Please configure cloud model settings below.")
+    
+    # Model selection
+    selected_model = st.sidebar.selectbox(
+        "Select Model",
+        options=list(available_models.keys()),
+        help="Choose which model to use for refactoring"
+    )
+    
+    # Show model status and details
+    if selected_model and selected_model in available_models:
+        model_info = available_models[selected_model]
+        
+        # Status indicator
+        status_color = {
+            "available": "🟢",
+            "loading": "🟡",
+            "error": "🔴",
+            "offline": "⚪"
+        }.get(model_info.get("status", "unknown"), "❓")
+        
+        # Display model information
+        st.sidebar.markdown(f"""
+        **Model Status:** {status_color} {model_info.get('status', 'Unknown').title()}
+        **Device:** {model_info.get('device', 'N/A')}
+        """)
+        
+        # Show size and memory info for local models
+        if model_info["type"] == "local":
+            st.sidebar.markdown(f"**Size:** {model_info.get('size_gb', 0):.1f} GB")
+            
+            # Show GPU/MPS memory usage if applicable
+            if model_info["device"] in ["GPU", "MPS"]:
+                memory = model_info.get("memory_usage", {})
+                st.sidebar.markdown(f"""
+                **Memory Usage:**
+                - Allocated: {memory.get('allocated', 0):.1f} GB
+                - Reserved: {memory.get('cached', 0):.1f} GB
+                """)
+        
+        # Show provider for cloud models
+        elif model_info["type"] == "cloud":
+            st.sidebar.markdown(f"**Provider:** {model_info.get('provider', 'Unknown')}")
+    
+    # API key input for cloud models
+    api_key = None
+    if model_source == "Cloud" and selected_model:
+        model_info = available_models.get(selected_model, {})
+        if model_info.get("requires_key", False):
+            api_key = st.sidebar.text_input(
+                f"{model_info.get('provider', 'API')} Key",
+                type="password",
+                help=f"Enter your {model_info.get('provider', 'API')} key"
+            )
+    
+    # Load model button
+    if st.sidebar.button("Load Model", help="Click to load the selected model"):
+        success = model_manager.load_model(model_source, selected_model, api_key)
+        if success:
+            st.session_state['current_model'] = selected_model
+    
+    # Target smells selection
+    st.sidebar.header("🎯 Target Smells")
+    selected_smells = []
+    
+    smell_options = {
+        "God Class": "Large class that does too much",
+        "Feature Envy": "Method uses more features of another class",
+        "Data Class": "Class with only data and no behavior",
+        "Long Method": "Method is too long and complex",
+        "Complex Class": "Class with high cyclomatic complexity"
+    }
+    
+    for smell, description in smell_options.items():
+        if st.sidebar.checkbox(smell, help=description):
+            selected_smells.append(smell)
+    
+    st.session_state['selected_smells'] = selected_smells
 
 def render_home_tab():
     """Render the Home tab content."""
@@ -452,11 +771,11 @@ def render_home_tab():
     # Status and Metrics
     col1, col2, col3 = st.columns(3)
     with col1:
-        model_status = "Active ✅" if st.session_state.model_manager.model else "Inactive ❌"
+        model_status = "Active ✅" if st.session_state.model_manager.model_loaded else "Inactive ❌"
         st.metric(
             "Model Status",
             model_status,
-            st.session_state.model_manager.model_name
+            st.session_state.model_manager.current_model or "No model loaded"
         )
     with col2:
         # TODO: Implement real memory usage tracking
@@ -1311,133 +1630,160 @@ def render_detection_tab():
             return
 
 def render_refactoring_tab():
-    """Render the Refactoring tab content."""
-    st.title("🛠️ Code Refactoring")
+    """Render the refactoring tab with model selection and code display."""
+    st.header("Code Refactoring")
     
-    # Check if project is loaded
-    if not st.session_state.project_manager.project_path:
-        st.warning("⚠️ Please upload a project first in the Project Upload tab.")
-        return
+    # Initialize session state for refactoring
+    if "refactoring_file" not in st.session_state:
+        st.session_state.refactoring_file = None
+    if "refactored_code" not in st.session_state:
+        st.session_state.refactored_code = None
+    if "refactoring_metadata" not in st.session_state:
+        st.session_state.refactoring_metadata = None
     
-    # Get available Java files
-    java_files = st.session_state.project_manager.project_metadata.get("java_files", [])
-    if not java_files:
-        st.error("❌ No Java files found in the project.")
-        return
+    # Model Selection Section
+    st.subheader("1. Select and Load Model")
+    col1, col2 = st.columns([2, 1])
     
-    # File selection
-    selected_file = st.selectbox(
-        "Select a file to refactor",
-        options=java_files,
-        format_func=lambda x: x["path"],
-        key="refactor_file_selector"
-    )
-    
-    if selected_file:
-        try:
-            # Read original file content
-            with open(selected_file["full_path"], 'r', encoding='utf-8') as f:
-                original_code = f.read()
-            
-            # Create two columns for original and refactored code
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("### Original Code")
-                st.code(original_code, language="java")
-            
-            with col2:
-                st.markdown("### Refactored Code")
-                if selected_file["path"] in st.session_state.refactored_paths:
-                    # Load previously refactored code
-                    refactored_path = st.session_state.refactored_paths[selected_file["path"]]
-                    with open(refactored_path, 'r', encoding='utf-8') as f:
-                        refactored_code = f.read()
-                else:
-                    refactored_code = original_code
-                
-                refactored_code = st.text_area(
-                    "Edit refactored code",
-                    value=refactored_code,
-                    height=400,
-                    key="refactored_code"
-                )
-            
-            # Action buttons
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                if st.button("💡 Generate Refactoring"):
-                    if not st.session_state.refactor_model:
-                        st.error("⚠️ Please load a model first")
-                        return
-                    
-                    with st.spinner("Generating refactored code..."):
-                        # Get detected smells for this file
-                        smells = st.session_state.analysis_results.get(
-                            selected_file["name"], {}
-                        ).get("smells", [])
-                        
-                        # Generate refactoring
-                        refactored_code, metadata = st.session_state.refactoring_engine.refactor_code(
-                            original_code,
-                            smells
-                        )
-                        
-                        if metadata.get("success"):
-                            st.session_state.refactored_code = refactored_code
-                            st.success("✅ Refactoring generated!")
-                        else:
-                            st.error(f"❌ Error: {metadata.get('error', 'Unknown error')}")
-            
-            with col2:
-                if st.button("✅ Apply Refactoring"):
-                    with st.spinner("Saving refactored code..."):
-                        # Save refactored code
-                        result = st.session_state.refactoring_manager.save_refactored_file(
-                            selected_file["full_path"],
-                            refactored_code,
-                            {"source_file": selected_file["path"]}
-                        )
-                        
-                        if result.get("success", True):
-                            st.session_state.refactored_paths[selected_file["path"]] = result["refactored_path"]
-                            st.success("✅ Refactoring applied and saved!")
-                            st.toast(f"Saved to: {result['refactored_path']}")
-                        else:
-                            st.error(f"❌ Error: {result.get('error', 'Unknown error')}")
-            
-            with col3:
-                if st.button("📥 Download Refactored Project"):
-                    with st.spinner("Creating ZIP file..."):
-                        zip_path = st.session_state.refactoring_manager.create_zip_output()
-                        if zip_path:
-                            with open(zip_path, 'rb') as f:
-                                st.download_button(
-                                    "💾 Download ZIP",
-                                    f,
-                                    file_name="refactored_project.zip",
-                                    mime="application/zip"
-                                )
-                        else:
-                            st.error("❌ Error creating ZIP file")
-            
-            # Show refactoring history
-            with st.expander("📋 Refactoring History"):
-                history = st.session_state.refactoring_manager.get_refactored_files()
-                if history["refactorings"]:
-                    for ref in history["refactorings"]:
-                        st.markdown(f"""
-                        **File:** {ref['source_file']}  
-                        **Time:** {ref['timestamp']}  
-                        **Status:** ✅ Success
-                        """)
-                else:
-                    st.info("No refactoring history yet")
-            
-        except Exception as e:
-            st.error(f"❌ Error: {str(e)}")
+    with col1:
+        # Model source selection
+        source = st.radio(
+            "Model Source",
+            ["Local", "Cloud"],
+            help="Choose between locally installed models or cloud-based models"
+        )
+        
+        # Get available models based on source
+        model_manager = st.session_state.get('model_manager')
+        available_models = {
+            name: info for name, info in model_manager.available_models.items()
+            if (info["type"] == "local" and source == "Local") or 
+               (info["type"] == "cloud" and source == "Cloud")
+        }
+        
+        model_names = list(available_models.keys())
+        if not model_names:
+            st.warning(f"No {'local' if source == 'Local' else 'cloud'} models available")
             return
+        
+        selected_model = st.selectbox(
+            "Select Model",
+            model_names,
+            help="Choose the model to use for refactoring"
+        )
+        
+        # Show model info
+        if selected_model:
+            model_info = available_models[selected_model]
+            st.info(
+                f"Model Type: {model_info['type'].title()}\n"
+                f"Device: {model_info.get('device', 'N/A')}\n"
+                f"Status: {model_info.get('status', 'Unknown')}"
+            )
+    
+    with col2:
+        # API Key input for cloud models
+        api_key = None
+        if source == "Cloud":
+            api_key = st.text_input(
+                "API Key",
+                type="password",
+                help="Enter your API key for the selected cloud model"
+            )
+        
+        # Load model button
+        if st.button("Load Model", key="load_model_button"):
+            with st.spinner("Loading model..."):
+                success = model_manager.load_model(source, selected_model, api_key)
+                if success:
+                    st.session_state.model_loaded = True
+    
+    # File Selection Section (only if model is loaded)
+    if st.session_state.get('model_loaded'):
+        st.subheader("2. Select Java File")
+        
+        # Check if project is loaded
+        if not st.session_state.project_manager.project_path:
+            st.warning("Please load a Java project first")
+            return
+        
+        # File selection
+        java_files = st.session_state.project_manager.project_metadata.get("java_files", [])
+        if not java_files:
+            st.warning("No Java files found in the project")
+            return
+        
+        selected_file = st.selectbox(
+            "Select Java File",
+            options=[f["path"] for f in java_files],
+            help="Choose a Java file to refactor"
+        )
+        
+        if selected_file:
+            # Find the full file info
+            file_info = next((f for f in java_files if f["path"] == selected_file), None)
+            if file_info:
+                try:
+                    with open(file_info["full_path"], 'r', encoding='utf-8') as f:
+                        file_content = f.read()
+                    st.session_state.refactoring_file = file_info
+                    
+                    # Display original code
+                    st.code(file_content, language="java")
+                    
+                    # Code smell selection
+                    st.subheader("3. Select Code Smells")
+                    smells = st.multiselect(
+                        "Code Smells to Address",
+                        [
+                            "Long Method",
+                            "Large Class",
+                            "Duplicate Code",
+                            "Complex Conditionals",
+                            "Dead Code",
+                            "Magic Numbers",
+                            "Long Parameter List"
+                        ],
+                        help="Select the code smells you want to address"
+                    )
+                    
+                    # Generate refactoring
+                    if smells and st.button("Generate Refactoring"):
+                        with st.spinner("Generating refactored code..."):
+                            try:
+                                refactored_code, metadata = model_manager.generate_refactoring(
+                                    file_content, smells
+                                )
+                                st.session_state.refactored_code = refactored_code
+                                st.session_state.refactoring_metadata = metadata
+                                
+                                # Display results
+                                st.subheader("4. Review Changes")
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.markdown("**Original Code**")
+                                    st.code(file_content, language="java")
+                                with col2:
+                                    st.markdown("**Refactored Code**")
+                                    st.code(refactored_code, language="java")
+                                
+                                # Show metadata
+                                if metadata:
+                                    st.subheader("Refactoring Details")
+                                    st.json(metadata)
+                                
+                                # Apply changes button
+                                if st.button("Apply Changes"):
+                                    with open(file_info["full_path"], 'w', encoding='utf-8') as f:
+                                        f.write(refactored_code)
+                                    st.success("Changes applied successfully!")
+                                    
+                            except Exception as e:
+                                st.error(f"Error during refactoring: {str(e)}")
+                except Exception as e:
+                    st.error(f"Error reading file: {str(e)}")
+    else:
+        st.info("Please load a model first to proceed with refactoring")
 
 def render_testing_tab():
     """Render the Testing & Metrics tab content."""
