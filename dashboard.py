@@ -681,6 +681,109 @@ def analyze_project_classes():
             except Exception:
                 continue
 
+def calculate_advanced_metrics(content: str, basic_metrics: dict) -> dict:
+    """Calculate advanced software metrics for a Java class."""
+    try:
+        # Ensure basic_metrics has required fields
+        if not basic_metrics or not isinstance(basic_metrics, dict):
+            return {
+                "lcom": {"value": 0, "threshold": 0.7, "status": "low", "icon": "🧩", "help": "Metrics calculation failed"},
+                "cbo": {"value": 0, "threshold": 5, "status": "low", "icon": "🔗", "help": "Metrics calculation failed"},
+                "dit": {"value": 0, "threshold": 3, "status": "low", "icon": "📐", "help": "Metrics calculation failed"},
+                "cc": {"value": 0, "threshold": 10, "status": "low", "icon": "🔄", "help": "Metrics calculation failed"},
+                "rfc": {"value": 0, "threshold": 20, "status": "low", "icon": "📡", "help": "Metrics calculation failed"}
+            }
+        
+        # LCOM calculation
+        method_count = basic_metrics.get("total_methods", 0)
+        lcom = min(0.1 * method_count, 1.0) if method_count > 0 else 0
+        
+        # CBO calculation
+        cbo = len(re.findall(r'import\s+[\w.]+;', content)) + \
+              len(re.findall(r'new\s+\w+\(', content))
+        
+        # DIT calculation
+        inheritance_chain = re.findall(r'extends\s+\w+', content)
+        dit = len(inheritance_chain)
+        
+        # CC calculation
+        cc = len(re.findall(r'\b(if|for|while|case|catch)\b', content))
+        
+        # RFC calculation
+        rfc = len(re.findall(r'(\w+\s+\w+\s*\([^)]*\)\s*{|\w+\.[a-zA-Z_]\w*\s*\([^)]*\))', content))
+        
+        # Calculate thresholds and status
+        metrics = {
+            "lcom": {
+                "value": round(lcom, 2),
+                "threshold": 0.7,
+                "status": "high" if lcom > 0.7 else "medium" if lcom > 0.4 else "low",
+                "icon": "🧩",
+                "help": "Lack of Cohesion of Methods (0-1). Lower is better."
+            },
+            "cbo": {
+                "value": cbo,
+                "threshold": 5,
+                "status": "high" if cbo > 5 else "medium" if cbo > 3 else "low",
+                "icon": "🔗",
+                "help": "Coupling Between Objects. Lower is better."
+            },
+            "dit": {
+                "value": dit,
+                "threshold": 3,
+                "status": "high" if dit > 3 else "medium" if dit > 2 else "low",
+                "icon": "📐",
+                "help": "Depth of Inheritance Tree. Lower is better."
+            },
+            "cc": {
+                "value": cc,
+                "threshold": 10,
+                "status": "high" if cc > 10 else "medium" if cc > 7 else "low",
+                "icon": "🔄",
+                "help": "Cyclomatic Complexity. Lower is better."
+            },
+            "rfc": {
+                "value": rfc,
+                "threshold": 20,
+                "status": "high" if rfc > 20 else "medium" if rfc > 15 else "low",
+                "icon": "📡",
+                "help": "Response For Class (methods + calls). Lower is better."
+            }
+        }
+        
+        return metrics
+    except Exception as e:
+        st.error(f"Error calculating metrics: {str(e)}")
+        return {
+            "lcom": {"value": 0, "threshold": 0.7, "status": "low", "icon": "🧩", "help": "Calculation error"},
+            "cbo": {"value": 0, "threshold": 5, "status": "low", "icon": "🔗", "help": "Calculation error"},
+            "dit": {"value": 0, "threshold": 3, "status": "low", "icon": "📐", "help": "Calculation error"},
+            "cc": {"value": 0, "threshold": 10, "status": "low", "icon": "🔄", "help": "Calculation error"},
+            "rfc": {"value": 0, "threshold": 20, "status": "low", "icon": "📡", "help": "Calculation error"}
+        }
+
+def render_metric_card(label: str, metric: dict, help_text: str = "") -> None:
+    """Render a metric card with status indicators."""
+    status_colors = {
+        "low": ("#28a745", "✅"),
+        "medium": ("#ffc107", "⚠️"),
+        "high": ("#dc3545", "⚠️")
+    }
+    color, icon = status_colors[metric["status"]]
+    
+    st.markdown(f"""
+    <div class="metric-card" style="border-left: 4px solid {color}; padding: 1rem;">
+        <div style="color: #666; font-size: 0.9em;">{metric["icon"]} {label}</div>
+        <div style="font-size: 1.5em; font-weight: bold; color: {color};">
+            {metric["value"]} {icon}
+        </div>
+        <div style="font-size: 0.8em; color: #666;">
+            Threshold: {metric["threshold"]}
+            {f'<br>{help_text}' if help_text else ''}
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
 def render_detection_tab():
     """Render the Smell Detection tab content."""
     st.markdown("""
@@ -848,8 +951,9 @@ def render_detection_tab():
                                     st.markdown(f"• {class_name}")
                 
                 if st.button("🔍 Analyze Code Smells", key="analyze_button", use_container_width=True):
-                    with st.spinner("Analyzing code smells..."):
+                    with st.spinner("Analyzing code metrics and smells..."):
                         try:
+                            # First run smell detection to get basic metrics
                             results = detect_smells([{
                                 "class_name": selected_file["name"],
                                 "content": file_content,
@@ -860,101 +964,141 @@ def render_detection_tab():
                                 }
                             }])
                             
+                            if not results or selected_file["name"] not in results:
+                                st.error("❌ Error: Smell detection failed to return results")
+                                return
+                                
                             st.session_state.analysis_results = results[selected_file["name"]]
+                            
+                            # Now calculate advanced metrics with the results
+                            advanced_metrics = calculate_advanced_metrics(
+                                file_content,
+                                st.session_state.analysis_results.get("metrics", {})
+                            )
+                            
+                            # Store metrics in session state
+                            st.session_state.advanced_metrics = advanced_metrics
                             st.session_state.show_analysis = True
                             st.toast("✅ Analysis complete!")
+                            
                         except Exception as e:
                             st.error(f"❌ Error during analysis: {str(e)}")
+                            st.session_state.show_analysis = False
                             return
                 
                 # Display Analysis Results
                 if st.session_state.show_analysis and st.session_state.analysis_results:
-                    metrics = st.session_state.analysis_results["metrics"]
-                    
-                    # Add class type information to metrics
-                    metric_cols = st.columns(4)
-                    metrics_data = [
-                        ("Total Classes", file_classes['total'], "🔷"),
-                        ("Lines of Code", metrics["loc"], "📏"),
-                        ("Total Methods", metrics["total_methods"], "🔧"),
-                        ("Complexity (WMC)", metrics["wmc"], "🔄")
-                    ]
-                    
-                    for col, (label, value, icon) in zip(metric_cols, metrics_data):
-                        with col:
-                            st.markdown(f"""
-                            <div class="metric-card">
-                            <h3>{icon} {value}</h3>
-                            <small>{label}</small>
-                            </div>
-                            """, unsafe_allow_html=True)
-                    
-                    # Detected Smells Section
-                    st.markdown("##### 🚨 Detected Code Smells")
-                    if st.session_state.analysis_results["smells"]:
-                        for smell in st.session_state.analysis_results["smells"]:
-                            smell_color = {
-                                "God Class": ("🔴", "#dc3545"),
-                                "Data Class": ("🟡", "#ffc107"),
-                                "Lazy Class": ("🟠", "#fd7e14"),
-                                "Feature Envy": ("🟣", "#6f42c1"),
-                                "Refused Bequest": ("🔵", "#0d6efd")
-                            }.get(smell, ("⚪", "#6c757d"))
+                    try:
+                        st.markdown("#### 📊 Metrics Analysis")
+                        
+                        # Basic Metrics Section
+                        st.markdown("##### Basic Metrics")
+                        basic_metrics = st.session_state.analysis_results.get("metrics", {})
+                        if not basic_metrics:
+                            st.warning("⚠️ Basic metrics calculation failed")
+                            return
                             
-                            st.markdown(f"""
-                            <div class="smell-card">
-                            <h4 style="color: {smell_color[1]}">{smell_color[0]} {smell}</h4>
-                            <p><i>{st.session_state.analysis_results['reasoning'][smell]}</i></p>
-                            </div>
-                            """, unsafe_allow_html=True)
-                    else:
-                        st.success("✅ No code smells detected in this file")
-                    
-                    # Quick Actions
-                    st.markdown("##### 🛠️ Quick Actions")
-                    action_col1, action_col2 = st.columns(2)
-                    with action_col1:
-                        if st.button("📋 Copy Analysis Report", use_container_width=True):
-                            # Create report text with class information
-                            report = f"""
-                            Code Smell Analysis Report
-                            File: {selected_file['path']}
-                            Analysis Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                        basic_cols = st.columns(4)
+                        basic_metrics_data = [
+                            ("Total Classes", file_classes['total'], "🔷", "Number of classes in file"),
+                            ("Lines of Code", basic_metrics.get("loc", 0), "📏", "Total lines of code"),
+                            ("Total Methods", basic_metrics.get("total_methods", 0), "🔧", "Number of methods"),
+                            ("WMC", basic_metrics.get("wmc", 0), "⚖️", "Weighted Methods per Class")
+                        ]
+                        
+                        for col, (label, value, icon, help_text) in zip(basic_cols, basic_metrics_data):
+                            with col:
+                                st.metric(
+                                    label=f"{icon} {label}",
+                                    value=value,
+                                    help=help_text
+                                )
+                        
+                        # Advanced Metrics Section
+                        st.markdown("##### Advanced Metrics")
+                        advanced_metrics = st.session_state.get("advanced_metrics", {})
+                        if not advanced_metrics:
+                            st.warning("⚠️ Advanced metrics calculation failed")
+                            return
                             
-                            Class Information:
-                            - Total Classes: {file_classes['total']}
-                            """
+                        # Create 3x2 grid for advanced metrics
+                        for i in range(0, len(advanced_metrics), 3):
+                            cols = st.columns(3)
+                            metrics_slice = list(advanced_metrics.items())[i:i+3]
+                            for col, (metric_name, metric_data) in zip(cols, metrics_slice):
+                                with col:
+                                    render_metric_card(
+                                        metric_name.upper(),
+                                        metric_data,
+                                        metric_data.get("help", "")
+                                    )
+                        
+                        # Export Metrics Button
+                        if st.button("📥 Export Metrics as JSON", use_container_width=True):
+                            export_data = {
+                                "file_info": {
+                                    "name": selected_file["name"],
+                                    "path": selected_file["path"],
+                                    "size": selected_file["size"]
+                                },
+                                "basic_metrics": basic_metrics,
+                                "advanced_metrics": {
+                                    k: {"value": v["value"], "status": v["status"]}
+                                    for k, v in advanced_metrics.items()
+                                },
+                                "smells": st.session_state.analysis_results["smells"],
+                                "analysis_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            }
                             
-                            for class_type, classes in file_classes['types'].items():
-                                if classes:
-                                    report += f"\n{class_type.title()}s: {', '.join(classes)}"
+                            # Convert to JSON string
+                            json_str = json.dumps(export_data, indent=2)
                             
-                            report += f"""
-                            
-                            Metrics:
-                            - Lines of Code: {metrics['loc']}
-                            - Total Methods: {metrics['total_methods']}
-                            - Public Methods: {metrics['public_methods']}
-                            - Complexity (WMC): {metrics['wmc']}
-                            
-                            Detected Smells:
-                            """
-                            
+                            # Create download button
+                            st.download_button(
+                                label="💾 Download Metrics Report",
+                                data=json_str,
+                                file_name=f"metrics_{selected_file['name']}.json",
+                                mime="application/json",
+                                use_container_width=True
+                            )
+                        
+                        st.divider()
+                        
+                        # Detected Smells Section with enhanced visualization
+                        st.markdown("##### 🚨 Detected Code Smells")
+                        if st.session_state.analysis_results["smells"]:
                             for smell in st.session_state.analysis_results["smells"]:
-                                report += f"\n{smell}:\n{st.session_state.analysis_results['reasoning'][smell]}\n"
-                            
-                            # Copy to clipboard (through JavaScript)
-                            st.markdown(f"""
-                            <script>
-                            navigator.clipboard.writeText(`{report}`);
-                            </script>
-                            """, unsafe_allow_html=True)
-                            st.toast("📋 Report copied to clipboard!")
-                    
-                    with action_col2:
-                        if st.button("🔄 Rerun Analysis", use_container_width=True):
-                            st.session_state.show_analysis = False
-                            st.experimental_rerun()
+                                smell_color = {
+                                    "God Class": ("��", "#dc3545", "High complexity and low cohesion"),
+                                    "Data Class": ("🟡", "#ffc107", "Lacks behavior"),
+                                    "Lazy Class": ("🟠", "#fd7e14", "Low responsibility"),
+                                    "Feature Envy": ("🟣", "#6f42c1", "High coupling"),
+                                    "Refused Bequest": ("🔵", "#0d6efd", "Inheritance misuse")
+                                }.get(smell, ("⚪", "#6c757d", ""))
+                                
+                                # Reference relevant metrics in reasoning
+                                metrics_reference = ""
+                                if smell == "God Class":
+                                    metrics_reference = f"WMC = {basic_metrics['wmc']}, LCOM = {advanced_metrics['lcom']['value']}"
+                                elif smell == "Feature Envy":
+                                    metrics_reference = f"CBO = {advanced_metrics['cbo']['value']}"
+                                
+                                st.markdown(f"""
+                                <div class="smell-card" style="border-left: 4px solid {smell_color[1]}; padding: 1rem; margin-bottom: 1rem;">
+                                    <h4 style="color: {smell_color[1]}">{smell_color[0]} {smell}</h4>
+                                    <p><i>{st.session_state.analysis_results['reasoning'][smell]}</i></p>
+                                    <small style="color: #666;">
+                                        {smell_color[2]}<br>
+                                        {metrics_reference}
+                                    </small>
+                                </div>
+                                """, unsafe_allow_html=True)
+                        else:
+                            st.success("✅ No code smells detected in this file")
+                        
+                    except Exception as e:
+                        st.error(f"❌ Error displaying analysis results: {str(e)}")
+                        return
                 
         except Exception as e:
             st.error(f"❌ Error reading file: {str(e)}")
