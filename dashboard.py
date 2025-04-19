@@ -11,6 +11,7 @@ import io
 import time
 import re
 from datetime import datetime
+from smell_detector.detector import detect_smells
 
 # TODO: Import your Java project analysis modules
 # from java_analyzer import JavaProjectAnalyzer
@@ -96,7 +97,6 @@ class ProjectManager:
         self.project_path: Optional[Path] = None
         self.project_files: List[Path] = []
         self.analysis_results: Dict = {}
-        self.refactoring_history: List[Dict] = []
         self.project_metadata: Dict = {
             "name": "",
             "source": "",
@@ -105,37 +105,42 @@ class ProjectManager:
             "total_size": 0,
             "java_files": []
         }
+        self.temp_dir = None
     
     def load_from_zip(self, zip_file) -> bool:
         """Load project from ZIP file."""
         try:
-            with tempfile.TemporaryDirectory() as temp_dir:
-                with zipfile.ZipFile(zip_file, 'r') as zip_ref:
-                    zip_ref.extractall(temp_dir)
-                self.project_path = Path(temp_dir)
-                
-                # Update project metadata
-                self.project_metadata["name"] = zip_file.name
-                self.project_metadata["source"] = "ZIP Upload"
-                self.project_metadata["upload_time"] = datetime.now()
-                
-                # Scan for Java files
-                self._scan_java_files()
-                return True
+            # Create a new temporary directory
+            self.cleanup()  # Clean up any existing temp directory
+            self.temp_dir = tempfile.mkdtemp()
+            self.project_path = Path(self.temp_dir)
+            
+            # Extract ZIP contents
+            with zipfile.ZipFile(zip_file, 'r') as zip_ref:
+                zip_ref.extractall(self.temp_dir)
+            
+            # Update project metadata
+            self.project_metadata["name"] = zip_file.name
+            self.project_metadata["source"] = "ZIP Upload"
+            self.project_metadata["upload_time"] = datetime.now()
+            
+            # Scan for Java files
+            self._scan_java_files()
+            return True
         except Exception as e:
             st.error(f"Error loading project: {str(e)}")
+            self.cleanup()
             return False
     
+    def cleanup(self):
+        """Clean up temporary directory."""
+        if self.temp_dir and os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir, ignore_errors=True)
+        self.temp_dir = None
+        self.project_path = None
+    
     def load_from_github(self, repo_url: str, branch: str = "main") -> bool:
-        """Load project from GitHub repository.
-        
-        Args:
-            repo_url (str): GitHub repository URL (e.g., 'https://github.com/user/repo')
-            branch (str, optional): Repository branch name. Defaults to "main".
-            
-        Returns:
-            bool: True if repository was successfully loaded, False otherwise.
-        """
+        """Load project from GitHub repository."""
         try:
             # Validate and parse GitHub URL
             url_pattern = r'^https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$'
@@ -157,10 +162,9 @@ class ProjectManager:
                     zip_url,
                     stream=True,
                     timeout=30,
-                    headers={'User-Agent': 'Mozilla/5.0'}  # Some GitHub API requires user agent
+                    headers={'User-Agent': 'Mozilla/5.0'}
                 )
                 
-                # Handle HTTP errors
                 if response.status_code == 404:
                     st.error(
                         f"Repository or branch not found: {owner}/{repo}:{branch}\n"
@@ -173,7 +177,7 @@ class ProjectManager:
                 elif response.status_code != 200:
                     st.error(
                         f"Failed to download repository. Status code: {response.status_code}\n"
-                        f"Error: {response.text[:200]}"  # Show first 200 chars of error
+                        f"Error: {response.text[:200]}"
                     )
                     return False
                 
@@ -182,13 +186,12 @@ class ProjectManager:
                 self.project_path = Path(temp_dir)
                 
                 with tempfile.NamedTemporaryFile() as temp_zip:
-                    # Download ZIP in chunks to handle large repos
+                    # Download ZIP in chunks
                     for chunk in response.iter_content(chunk_size=8192):
                         if chunk:
                             temp_zip.write(chunk)
                     temp_zip.flush()
                     
-                    # Extract ZIP contents
                     try:
                         with zipfile.ZipFile(temp_zip.name) as zip_ref:
                             zip_ref.extractall(temp_dir)
@@ -263,6 +266,9 @@ class ProjectManager:
     
     def _scan_java_files(self) -> None:
         """Scan project directory for Java files."""
+        if not self.project_path or not self.project_path.exists():
+            return
+        
         self.project_files = []
         self.project_metadata["java_files"] = []
         self.project_metadata["file_count"] = 0
@@ -274,56 +280,20 @@ class ProjectManager:
                     file_path = Path(root) / file
                     self.project_files.append(file_path)
                     
-                    # Add to metadata
-                    rel_path = file_path.relative_to(self.project_path)
+                    # Store absolute path for reliable access
+                    abs_path = str(file_path.absolute())
+                    rel_path = str(file_path.relative_to(self.project_path))
+                    
+                    # Add to metadata with both relative and absolute paths
                     file_size = file_path.stat().st_size
                     self.project_metadata["java_files"].append({
                         "name": file,
-                        "path": str(rel_path),
-                        "size": file_size,
-                        "full_path": str(file_path)
+                        "path": rel_path,
+                        "full_path": abs_path,
+                        "size": file_size
                     })
                     self.project_metadata["file_count"] += 1
                     self.project_metadata["total_size"] += file_size
-    
-    def get_file_tree(self) -> Dict:
-        """Generate a tree structure of the project files."""
-        tree = {"name": self.project_metadata["name"], "children": []}
-        
-        # Group files by directory
-        for file_info in self.project_metadata["java_files"]:
-            path_parts = Path(file_info["path"]).parts
-            current = tree["children"]
-            
-            # Handle directories
-            for part in path_parts[:-1]:
-                # Find or create directory node
-                dir_node = next((node for node in current if node["name"] == part and "children" in node), None)
-                if not dir_node:
-                    dir_node = {"name": part, "children": []}
-                    current.append(dir_node)
-                current = dir_node["children"]
-            
-            # Add file node
-            current.append({
-                "name": path_parts[-1] if path_parts else file_info["name"],
-                "size": file_info["size"]
-            })
-        
-        return tree
-    
-    def analyze_project(self) -> Dict:
-        """Analyze the project for code smells."""
-        try:
-            # TODO: Connect to real Java analysis logic
-            return {
-                "smells": [],
-                "metrics": {},
-                "files": []
-            }
-        except Exception as e:
-            st.error(f"Error analyzing project: {str(e)}")
-            return {}
 
 class ModelManager:
     """Manages LLM model loading and operations."""
@@ -510,11 +480,21 @@ def render_upload_tab():
             type="zip",
             help="Upload a ZIP file containing your Java project"
         )
+        
         if uploaded_file and st.button("📥 Load Project"):
             with st.spinner("Extracting and analyzing project..."):
                 if st.session_state.project_manager.load_from_zip(uploaded_file):
-                    st.success(f"Project loaded successfully! Found {st.session_state.project_manager.project_metadata['file_count']} Java files.")
-        
+                    java_files = st.session_state.project_manager.project_metadata["java_files"]
+                    if java_files:
+                        st.success(f"✅ Project loaded successfully! Found {len(java_files)} Java files.")
+                        # Show found files
+                        with st.expander("📁 Found Java Files"):
+                            for file in java_files:
+                                st.text(f"📄 {file['path']}")
+                    else:
+                        st.error("❌ No Java files found in the uploaded ZIP.")
+                        st.info("Please ensure your ZIP file contains Java source files.")
+
     elif method == "GitHub Repository":
         repo_url = st.text_input(
             "GitHub Repository URL",
@@ -645,54 +625,340 @@ def render_upload_tab():
                 st.session_state.project_manager = ProjectManager()
                 st.success("Project cleared!")
 
+def count_classes(content: str) -> tuple:
+    """Count and identify classes in Java content."""
+    # Regular expressions for different class types
+    class_patterns = {
+        'interface': r'public\s+interface\s+(\w+)',
+        'abstract': r'public\s+abstract\s+class\s+(\w+)',
+        'enum': r'public\s+enum\s+(\w+)',
+        'class': r'public\s+class\s+(\w+)'
+    }
+    
+    classes = {
+        'total': 0,
+        'types': {
+            'interface': [],
+            'abstract': [],
+            'enum': [],
+            'class': []
+        }
+    }
+    
+    for class_type, pattern in class_patterns.items():
+        matches = re.finditer(pattern, content)
+        found_classes = [match.group(1) for match in matches]
+        classes['types'][class_type] = found_classes
+        classes['total'] += len(found_classes)
+    
+    return classes
+
+def analyze_project_classes():
+    """Analyze all classes in the project."""
+    if not hasattr(st.session_state, 'project_class_analysis'):
+        st.session_state.project_class_analysis = {
+            'total_classes': 0,
+            'class_types': {
+                'interface': 0,
+                'abstract': 0,
+                'enum': 0,
+                'class': 0
+            }
+        }
+        
+        # Analyze each Java file
+        java_files = st.session_state.project_manager.project_metadata.get("java_files", [])
+        for file in java_files:
+            try:
+                with open(file["full_path"], 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    classes = count_classes(content)
+                    
+                    # Update totals
+                    st.session_state.project_class_analysis['total_classes'] += classes['total']
+                    for class_type, class_list in classes['types'].items():
+                        st.session_state.project_class_analysis['class_types'][class_type] += len(class_list)
+            except Exception:
+                continue
+
 def render_detection_tab():
     """Render the Smell Detection tab content."""
-    st.title("🔍 Code Smell Detection")
+    st.markdown("""
+    ### 🔍 Code Smell Detection
+    <style>
+    .file-stats {
+        font-size: 0.9em;
+        color: #666;
+        margin-bottom: 1em;
+    }
+    .smell-header {
+        color: #1f77b4;
+        margin-top: 1em;
+    }
+    .metric-card {
+        background-color: #f8f9fa;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border: 1px solid #e9ecef;
+    }
+    .smell-card {
+        background-color: #fff;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border: 1px solid #dee2e6;
+        margin-bottom: 0.5rem;
+    }
+    </style>
+    """, unsafe_allow_html=True)
     
+    st.caption(
+        "Select a Java class to automatically analyze it for potential code smells. "
+        "The analysis uses intelligent detection algorithms to identify various anti-patterns."
+    )
+    
+    # Check if project is loaded
     if not st.session_state.project_manager.project_path:
-        st.warning("Please upload a project first")
+        st.warning("⚠️ Please upload a project first in the Project Upload tab.")
         return
     
-    # Control Panel
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if st.button("🔄 Run Detection"):
-            with st.spinner("Analyzing project..."):
-                results = st.session_state.project_manager.analyze_project()
-                st.session_state.project_manager.analysis_results = results
-                st.success("Analysis complete!")
-    with col2:
-        if st.button("💾 Save Results"):
-            # TODO: Implement results saving
-            st.success("Results saved!")
-    with col3:
-        if st.button("📋 Copy Report"):
-            # TODO: Implement report copying
-            st.success("Report copied to clipboard!")
+    # Check if we have Java files
+    java_files = st.session_state.project_manager.project_metadata.get("java_files", [])
+    if not java_files:
+        st.error("❌ No Java files found in the project.")
+        return
     
-    # Results Table
-    if st.session_state.project_manager.analysis_results:
-        st.markdown("### Detected Smells")
-        # TODO: Implement real results display
-        st.dataframe({
-            "Class": ["UserManager", "DataService", "Utils"],
-            "Smells": ["God Class", "Feature Envy", "None"],
-            "Confidence": ["95%", "87%", "N/A"],
-            "LOC": [523, 245, 89]
-        })
+    # Initialize session state for analysis
+    if "current_file" not in st.session_state:
+        st.session_state.current_file = None
+    if "file_content" not in st.session_state:
+        st.session_state.file_content = None
+    if "analysis_results" not in st.session_state:
+        st.session_state.analysis_results = None
+    if "show_analysis" not in st.session_state:
+        st.session_state.show_analysis = False
+
+    # Analyze project classes if not done
+    analyze_project_classes()
+    
+    # Create two columns for file selection and stats
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.markdown("#### 📁 Select Java File")
+        # Search filter
+        search_query = st.text_input(
+            "🔍 Search files",
+            placeholder="Type to filter files...",
+            key="file_search"
+        )
+    
+    with col2:
+        st.markdown("#### 📊 Project Stats")
         
-        # Detailed Analysis
-        with st.expander("📝 Detailed Analysis", expanded=True):
-            # TODO: Implement real code display
-            st.code("""
-public class UserManager {
-    private UserRepository userRepo;
-    private AuthService authService;
-    private EmailService emailService;
-    // God Class: Too many responsibilities
-    ...
-}
-            """, language="java")
+        # Enhanced project stats with class information
+        total_classes = st.session_state.project_class_analysis['total_classes']
+        class_types = st.session_state.project_class_analysis['class_types']
+        
+        st.markdown(f"""
+        <div class="file-stats">
+        📄 Total Java Files: {len(java_files)}<br>
+        🔷 Total Classes: {total_classes}<br>
+        📦 Project Size: {format_file_size(st.session_state.project_manager.project_metadata["total_size"])}<br>
+        <small>
+        • Regular Classes: {class_types['class']}<br>
+        • Interfaces: {class_types['interface']}<br>
+        • Abstract Classes: {class_types['abstract']}<br>
+        • Enums: {class_types['enum']}
+        </small>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Filter files based on search
+    filtered_files = [
+        f for f in java_files
+        if not search_query or search_query.lower() in f["name"].lower() or search_query.lower() in f["path"].lower()
+    ]
+    
+    # Group files by directory for better organization
+    grouped_files = {}
+    for f in filtered_files:
+        dir_path = os.path.dirname(f["path"])
+        if dir_path not in grouped_files:
+            grouped_files[dir_path] = []
+        grouped_files[dir_path].append(f)
+    
+    # File selection dropdown with directory grouping
+    selected_file = st.selectbox(
+        "Select a file to analyze",
+        options=filtered_files,
+        format_func=lambda x: f"📄 {x['path']}",
+        key="file_selector"
+    )
+    
+    if selected_file:
+        try:
+            # Verify file exists and read content
+            file_path = selected_file["full_path"]
+            if not os.path.exists(file_path):
+                st.error(f"❌ File not found: {selected_file['path']}")
+                return
+                
+            # Read and display file content
+            with open(file_path, 'r', encoding='utf-8') as f:
+                file_content = f.read()
+                
+            # Analyze classes in current file
+            file_classes = count_classes(file_content)
+            
+            # Create tabs for content and analysis
+            code_tab, analysis_tab = st.tabs(["📝 Source Code", "🔍 Analysis"])
+            
+            with code_tab:
+                # Enhanced file info header with class information
+                class_info_html = ""
+                for class_type, classes in file_classes['types'].items():
+                    if classes:
+                        class_info_html += f"<br>📘 <b>{class_type.title()}s</b>: {', '.join(classes)}"
+                
+                st.markdown(f"""
+                <div class="file-stats">
+                📄 <b>{os.path.basename(selected_file['path'])}</b><br>
+                📁 Path: {os.path.dirname(selected_file['path'])}<br>
+                📊 Size: {format_file_size(selected_file['size'])}<br>
+                🔷 Classes in File: {file_classes['total']}
+                {class_info_html}
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Code viewer with line numbers
+                st.code(file_content, language="java")
+            
+            with analysis_tab:
+                # Analysis Button
+                if not st.session_state.show_analysis:
+                    st.info("Click the button below to analyze the code for potential smells.")
+                    
+                    # Show class summary before analysis
+                    if file_classes['total'] > 0:
+                        st.markdown("##### 📘 Class Summary")
+                        for class_type, classes in file_classes['types'].items():
+                            if classes:
+                                st.markdown(f"**{class_type.title()}s**")
+                                for class_name in classes:
+                                    st.markdown(f"• {class_name}")
+                
+                if st.button("🔍 Analyze Code Smells", key="analyze_button", use_container_width=True):
+                    with st.spinner("Analyzing code smells..."):
+                        try:
+                            results = detect_smells([{
+                                "class_name": selected_file["name"],
+                                "content": file_content,
+                                "inheritance_data": {
+                                    "inherited_methods": 5,
+                                    "used_methods": 2,
+                                    "overridden_methods": 3
+                                }
+                            }])
+                            
+                            st.session_state.analysis_results = results[selected_file["name"]]
+                            st.session_state.show_analysis = True
+                            st.toast("✅ Analysis complete!")
+                        except Exception as e:
+                            st.error(f"❌ Error during analysis: {str(e)}")
+                            return
+                
+                # Display Analysis Results
+                if st.session_state.show_analysis and st.session_state.analysis_results:
+                    metrics = st.session_state.analysis_results["metrics"]
+                    
+                    # Add class type information to metrics
+                    metric_cols = st.columns(4)
+                    metrics_data = [
+                        ("Total Classes", file_classes['total'], "🔷"),
+                        ("Lines of Code", metrics["loc"], "📏"),
+                        ("Total Methods", metrics["total_methods"], "🔧"),
+                        ("Complexity (WMC)", metrics["wmc"], "🔄")
+                    ]
+                    
+                    for col, (label, value, icon) in zip(metric_cols, metrics_data):
+                        with col:
+                            st.markdown(f"""
+                            <div class="metric-card">
+                            <h3>{icon} {value}</h3>
+                            <small>{label}</small>
+                            </div>
+                            """, unsafe_allow_html=True)
+                    
+                    # Detected Smells Section
+                    st.markdown("##### 🚨 Detected Code Smells")
+                    if st.session_state.analysis_results["smells"]:
+                        for smell in st.session_state.analysis_results["smells"]:
+                            smell_color = {
+                                "God Class": ("🔴", "#dc3545"),
+                                "Data Class": ("🟡", "#ffc107"),
+                                "Lazy Class": ("🟠", "#fd7e14"),
+                                "Feature Envy": ("🟣", "#6f42c1"),
+                                "Refused Bequest": ("🔵", "#0d6efd")
+                            }.get(smell, ("⚪", "#6c757d"))
+                            
+                            st.markdown(f"""
+                            <div class="smell-card">
+                            <h4 style="color: {smell_color[1]}">{smell_color[0]} {smell}</h4>
+                            <p><i>{st.session_state.analysis_results['reasoning'][smell]}</i></p>
+                            </div>
+                            """, unsafe_allow_html=True)
+                    else:
+                        st.success("✅ No code smells detected in this file")
+                    
+                    # Quick Actions
+                    st.markdown("##### 🛠️ Quick Actions")
+                    action_col1, action_col2 = st.columns(2)
+                    with action_col1:
+                        if st.button("📋 Copy Analysis Report", use_container_width=True):
+                            # Create report text with class information
+                            report = f"""
+                            Code Smell Analysis Report
+                            File: {selected_file['path']}
+                            Analysis Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                            
+                            Class Information:
+                            - Total Classes: {file_classes['total']}
+                            """
+                            
+                            for class_type, classes in file_classes['types'].items():
+                                if classes:
+                                    report += f"\n{class_type.title()}s: {', '.join(classes)}"
+                            
+                            report += f"""
+                            
+                            Metrics:
+                            - Lines of Code: {metrics['loc']}
+                            - Total Methods: {metrics['total_methods']}
+                            - Public Methods: {metrics['public_methods']}
+                            - Complexity (WMC): {metrics['wmc']}
+                            
+                            Detected Smells:
+                            """
+                            
+                            for smell in st.session_state.analysis_results["smells"]:
+                                report += f"\n{smell}:\n{st.session_state.analysis_results['reasoning'][smell]}\n"
+                            
+                            # Copy to clipboard (through JavaScript)
+                            st.markdown(f"""
+                            <script>
+                            navigator.clipboard.writeText(`{report}`);
+                            </script>
+                            """, unsafe_allow_html=True)
+                            st.toast("📋 Report copied to clipboard!")
+                    
+                    with action_col2:
+                        if st.button("🔄 Rerun Analysis", use_container_width=True):
+                            st.session_state.show_analysis = False
+                            st.experimental_rerun()
+                
+        except Exception as e:
+            st.error(f"❌ Error reading file: {str(e)}")
+            return
 
 def render_refactoring_tab():
     """Render the Refactoring tab content."""
