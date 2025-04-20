@@ -903,10 +903,11 @@ def render_home_tab():
     col1, col2, col3 = st.columns(3)
     with col1:
         model_status = "Active ✅" if st.session_state.model_manager.model_loaded else "Inactive ❌"
+        model_name = st.session_state.model_manager.current_model.get("name") if st.session_state.model_manager.current_model else "No model loaded"
         st.metric(
-            "Model Status",
-            model_status,
-            st.session_state.model_manager.current_model or "No model loaded"
+            label="Model Status",
+            value=model_status,
+            delta=model_name
         )
     with col2:
         # TODO: Implement real memory usage tracking
