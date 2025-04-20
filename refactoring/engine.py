@@ -358,84 +358,104 @@ class RefactoringEngine:
         self.logger = logging.getLogger(__name__)
     
     def _load_local_model(self, model_name: str) -> Tuple[bool, Optional[str]]:
-        """Load a local model with proper device and memory configuration."""
+        """Load a local model with improved file handling and verification."""
         try:
-            # Get model path from registry
-            models_dir = Path("models")
-            model_path = models_dir / "code-llama"
+            logger.info(f"Loading local model: {model_name}")
             
-            if not model_path.exists():
-                return False, f"❌ Model directory not found: {model_path}"
+            # Set model name
+            self.model_name = model_name
             
-            # Load config
+            # Map friendly model names to their IDs
+            model_map = {
+                "Code Llama 13B": "codellama/CodeLlama-13b-hf",
+                "Code Llama 7B": "codellama/CodeLlama-7b-hf",
+                "Code Llama 34B": "codellama/CodeLlama-34b-hf"
+            }
+            
+            model_id = model_map.get(model_name)
+            if not model_id:
+                error_msg = f"Unknown model: {model_name}"
+                logger.error(error_msg)
+                return False, error_msg
+            
+            # Check model files
+            model_path = Path("models") / model_name.lower().replace(" ", "-")
             config_file = model_path / "config.yaml"
-            if not config_file.exists():
-                return False, f"❌ Model config not found: {config_file}"
             
-            with open(config_file) as f:
-                config = yaml.safe_load(f)
+            if not config_file.exists():
+                error_msg = f"Config file not found: {config_file}"
+                logger.error(error_msg)
+                return False, error_msg
+            
+            try:
+                with open(config_file) as f:
+                    config = yaml.safe_load(f)
+            except Exception as e:
+                error_msg = f"Error loading config: {str(e)}"
+                logger.error(error_msg)
+                return False, error_msg
             
             # Verify model files
             required_files = config.get("model_files", [])
-            missing_files = []
+            model_files = []
             for file in required_files:
-                if not (model_path / file).exists():
-                    missing_files.append(file)
+                file_path = model_path / file
+                if not file_path.exists():
+                    error_msg = f"Model file not found: {file_path}"
+                    logger.error(error_msg)
+                    return False, error_msg
+                model_files.append(file_path)
             
-            if missing_files:
-                return False, f"❌ Missing model files: {', '.join(missing_files)}"
-            
-            # Initialize tokenizer with safe settings
+            # Load tokenizer with improved error handling
             try:
+                logger.info("Loading tokenizer...")
                 self.tokenizer = AutoTokenizer.from_pretrained(
                     str(model_path),
                     trust_remote_code=True,
-                    use_fast=False,  # Disable fast tokenizer for better compatibility
-                    padding_side="left"
+                    use_fast=False  # Disable fast tokenizer for better compatibility
                 )
+                
+                # Ensure pad token is set
+                if self.tokenizer.pad_token is None:
+                    self.tokenizer.pad_token = self.tokenizer.eos_token
+                    logger.info("Set pad token to EOS token")
+                
             except Exception as e:
-                return False, f"❌ Failed to load tokenizer: {str(e)}"
+                error_msg = f"Error loading tokenizer: {str(e)}"
+                logger.error(error_msg)
+                return False, error_msg
             
-            # Update memory config with model-specific settings
-            model_config = {
-                "torch_dtype": getattr(torch, self.memory_config.get("torch_dtype", "float32").__class__.__name__),
-                "device_map": self.memory_config.get("device_map"),
-                "load_in_8bit": self.memory_config.get("load_in_8bit", False),
-                "load_in_4bit": self.memory_config.get("load_in_4bit", False)
-            }
-            
-            # Special handling for MPS
-            if self.device == "mps":
-                model_config.update({
-                    "device_map": None,  # Force manual device management
-                    "torch_dtype": torch.float32,
-                    "load_in_8bit": False,
-                    "load_in_4bit": False
-                })
-                os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
-            
-            # Load model with updated config
+            # Load model with improved memory handling
             try:
-                self.model = AutoModelForCausalLM.from_pretrained(
-                    str(model_path),
-                    trust_remote_code=True,
-                    use_safetensors=True,  # Prefer safetensors format
-                    **model_config
-                )
+                logger.info("Loading model...")
                 
-                # Move model to device if not using device_map
-                if model_config["device_map"] is None and self.device != "cpu":
-                    self.model = self.model.to(self.device)
+                # Get device-specific configuration
+                device = self.device
+                if device == "mps":
+                    logger.info("Using MPS-specific configuration")
+                    # Force CPU memory for MPS
+                    self.model = AutoModelForCausalLM.from_pretrained(
+                        str(model_path),
+                        torch_dtype=torch.float32,  # MPS requires float32
+                        device_map=None,  # Manual device management
+                        low_cpu_mem_usage=True,
+                        trust_remote_code=True
+                    )
+                    # Move to MPS after loading
+                    self.model = self.model.to(device)
+                else:
+                    self.model = AutoModelForCausalLM.from_pretrained(
+                        str(model_path),
+                        **self.memory_config,
+                        trust_remote_code=True
+                    )
                 
-                self.model.eval()  # Set to evaluation mode
-                self.model_name = model_name
+                # Set model to evaluation mode
+                self.model.eval()
                 
                 # Test model with a simple prompt
-                test_prompt = "def test():"
-                inputs = self.tokenizer(test_prompt, return_tensors="pt")
-                if model_config["device_map"] is None:
-                    inputs = {k: v.to(self.device) for k, v in inputs.items()}
-                
+                test_prompt = "def hello():"
+                inputs = self.tokenizer(test_prompt, return_tensors="pt").to(device)
                 with torch.no_grad():
                     _ = self.model.generate(
                         inputs["input_ids"],
@@ -444,13 +464,18 @@ class RefactoringEngine:
                         top_p=0.95
                     )
                 
+                logger.info(f"Model loaded successfully on {device}")
                 return True, None
                 
             except Exception as e:
-                return False, f"❌ Failed to load model: {str(e)}"
+                error_msg = f"Error loading model: {str(e)}"
+                logger.error(error_msg)
+                return False, error_msg
                 
         except Exception as e:
-            return False, f"❌ Error in _load_local_model: {str(e)}"
+            error_msg = f"Error in _load_local_model: {str(e)}"
+            logger.error(error_msg)
+            return False, error_msg
 
     def _load_cloud_model(self, model_name: str, api_key: Optional[str] = None) -> bool:
         """Load a cloud model."""

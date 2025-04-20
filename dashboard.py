@@ -397,13 +397,19 @@ class ModelManager:
             })
         elif device == "mps":
             self.logger.info("Applying MPS-specific configuration")
+            # For MPS, we'll use CPU memory and handle device transfer manually
             config.update({
                 "torch_dtype": torch.float32,  # MPS requires float32
-                "device_map": None,  # Manual device management for MPS
+                "device_map": None,  # Manual device management
+                "load_in_8bit": False,  # Disable 8-bit quantization for MPS
+                "low_cpu_mem_usage": True,
                 "max_memory": {
                     "cpu": f"{int(available_gb * 0.5)}GB"  # Use CPU memory for MPS
                 }
             })
+            # Set environment variables for MPS
+            os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+            os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.7"
         else:  # CPU
             self.logger.info("Applying CPU-specific configuration")
             config.update({
@@ -523,80 +529,100 @@ class ModelManager:
         # Check for local models
         models_dir = Path("models")
         if models_dir.exists():
-            llama_dir = models_dir / "code-llama"
-            if llama_dir.is_dir():
-                config_file = llama_dir / "config.yaml"
-                if config_file.exists():
-                    try:
-                        with open(config_file) as f:
-                            config = yaml.safe_load(f)
-                        
-                        self.logger.info(f"Found config file: {config}")
-                        
-                        # Verify required model files from config
-                        required_files = config.get("model_files", [])
-                        missing_files = []
-                        for file in required_files:
-                            if not (llama_dir / file).exists():
-                                missing_files.append(file)
-                        
-                        if missing_files:
-                            self.logger.warning(f"Missing model files: {missing_files}")
-                            return models
-                        
-                        # All files exist
-                        model_files = [llama_dir / file for file in required_files]
-                        device = self.hardware_info["recommended_device"]
-                        
-                        models["Code Llama 13B"] = {
-                            "name": "Code Llama 13B",
-                            "path": str(llama_dir),
-                            "type": "local",
-                            "status": "available",
-                            "device": device,
-                            "model_format": "bin",
-                            "size_gb": sum(f.stat().st_size / (1024**3) for f in model_files),
-                            "files": [str(f) for f in model_files],
-                            "config": config,
-                            "memory_config": self._get_memory_config()
-                        }
-                        
-                        self.logger.info(
-                            f"Found Code Llama 13B model:\n"
-                            f"- Device: {device}\n"
-                            f"- Files: {len(model_files)}\n"
-                            f"- Total size: {models['Code Llama 13B']['size_gb']:.1f} GB"
-                        )
-                    except Exception as e:
-                        self.logger.error(f"Error loading model config: {str(e)}", exc_info=True)
-                        return models
-                else:
-                    self.logger.warning(f"Config file not found: {config_file}")
-            else:
-                self.logger.warning(f"Model directory not found: {llama_dir}")
-        else:
-            self.logger.warning(f"Models directory not found: {models_dir}")
+            for model_dir in models_dir.iterdir():
+                if not model_dir.is_dir():
+                    continue
+                    
+                config_file = model_dir / "config.yaml"
+                if not config_file.exists():
+                    self.logger.warning(f"No config file found in {model_dir}")
+                    continue
+                
+                try:
+                    with open(config_file) as f:
+                        config = yaml.safe_load(f)
+                    
+                    self.logger.info(f"Found config file in {model_dir}: {config}")
+                    
+                    # Get model name from directory
+                    model_name = model_dir.name.replace("-", " ").title()
+                    
+                    # Verify required model files
+                    required_files = config.get("model_files", [])
+                    model_files = []
+                    missing_files = []
+                    
+                    for file in required_files:
+                        file_path = model_dir / file
+                        if not file_path.exists():
+                            missing_files.append(file)
+                        else:
+                            model_files.append(file_path)
+                    
+                    if missing_files:
+                        self.logger.warning(f"Missing model files in {model_dir}: {missing_files}")
+                        continue
+                    
+                    # Check file formats
+                    has_bin = any(f.suffix == ".bin" for f in model_files)
+                    has_safetensors = any(f.suffix == ".safetensors" for f in model_files)
+                    
+                    if not (has_bin or has_safetensors):
+                        self.logger.warning(f"No valid model files found in {model_dir}")
+                        continue
+                    
+                    # Get device and memory configuration
+                    device = self.hardware_info["recommended_device"]
+                    memory_config = self._get_memory_config()
+                    
+                    # Add model to available models
+                    models[model_name] = {
+                        "name": model_name,
+                        "path": str(model_dir),
+                        "type": "local",
+                        "status": "available",
+                        "device": device,
+                        "model_format": "safetensors" if has_safetensors else "bin",
+                        "size_gb": sum(f.stat().st_size / (1024**3) for f in model_files),
+                        "files": [str(f) for f in model_files],
+                        "config": config,
+                        "memory_config": memory_config
+                    }
+                    
+                    self.logger.info(
+                        f"Found {model_name} model:\n"
+                        f"- Device: {device}\n"
+                        f"- Format: {models[model_name]['model_format']}\n"
+                        f"- Files: {len(model_files)}\n"
+                        f"- Total size: {models[model_name]['size_gb']:.1f} GB"
+                    )
+                    
+                except Exception as e:
+                    self.logger.error(f"Error processing model in {model_dir}: {str(e)}")
+                    continue
         
         # Add cloud models
         cloud_models = {
             "GPT-4": {
                 "name": "GPT-4",
                 "type": "cloud",
-                "provider": "OpenAI",
                 "status": "available",
-                "requires_key": True
+                "provider": "openai",
+                "max_tokens": 8192,
+                "temperature": 0.7
             },
             "Claude-2": {
                 "name": "Claude-2",
                 "type": "cloud",
-                "provider": "Anthropic",
                 "status": "available",
-                "requires_key": True
+                "provider": "anthropic",
+                "max_tokens": 100000,
+                "temperature": 0.7
             }
         }
         models.update(cloud_models)
         
-        self.logger.info(f"Total models discovered: {len(models)}")
+        self.logger.info(f"Model discovery complete. Found {len(models)} models.")
         return models
     
     def get_model_status(self, model_name: str) -> Dict:
@@ -1764,6 +1790,7 @@ def render_detection_tab():
 def render_refactoring_tab():
     """Render the refactoring tab with model selection and code display."""
     st.header("Code Refactoring")
+    st.markdown("Follow these steps to refactor your Java code using AI-powered suggestions.")
     
     # Initialize session state for refactoring
     if "refactoring_file" not in st.session_state:
@@ -1773,149 +1800,189 @@ def render_refactoring_tab():
     if "refactoring_metadata" not in st.session_state:
         st.session_state.refactoring_metadata = None
     
-    # Model Selection Section
-    st.subheader("1. Select and Load Model")
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        # Model source selection
-        source = st.radio(
-            "Model Source",
-            ["Local", "Cloud"],
-            help="Choose between locally installed models or cloud-based models"
-        )
+    # 1. Model Configuration
+    with st.expander("🤖 Model Configuration", expanded=True):
+        st.markdown("### Select and Configure Your Model")
         
-        # Get available models based on source
-        model_manager = st.session_state.get('model_manager')
-        available_models = {
-            name: info for name, info in model_manager.available_models.items()
-            if (info["type"] == "local" and source == "Local") or 
-               (info["type"] == "cloud" and source == "Cloud")
-        }
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            source = st.radio(
+                "Model Source",
+                ["Local", "Cloud"],
+                help="Choose between locally installed models or cloud-based models",
+                horizontal=True
+            )
+            
+            model_manager = st.session_state.get('model_manager')
+            available_models = {
+                name: info for name, info in model_manager.available_models.items()
+                if (info["type"] == "local" and source == "Local") or 
+                   (info["type"] == "cloud" and source == "Cloud")
+            }
+            
+            model_names = list(available_models.keys())
+            if not model_names:
+                st.warning(f"No {'local' if source == 'Local' else 'cloud'} models available")
+                return
+            
+            selected_model = st.selectbox(
+                "Select Model",
+                model_names,
+                help="Choose the model to use for refactoring"
+            )
         
-        model_names = list(available_models.keys())
-        if not model_names:
-            st.warning(f"No {'local' if source == 'Local' else 'cloud'} models available")
-            return
+        with col2:
+            api_key = None
+            if source == "Cloud":
+                api_key = st.text_input(
+                    "API Key",
+                    type="password",
+                    help="Enter your API key for the selected cloud model"
+                )
+            
+            if st.button("Load Model", key="load_model_button", use_container_width=True):
+                with st.spinner("Loading model..."):
+                    success = model_manager.load_model(source, selected_model, api_key)
+                    if success:
+                        st.session_state.model_loaded = True
+                        st.success(f"Model {selected_model} loaded successfully!")
         
-        selected_model = st.selectbox(
-            "Select Model",
-            model_names,
-            help="Choose the model to use for refactoring"
-        )
-        
-        # Show model info
+        # Show model info if selected
         if selected_model:
             model_info = available_models[selected_model]
             st.info(
-                f"Model Type: {model_info['type'].title()}\n"
-                f"Device: {model_info.get('device', 'N/A')}\n"
-                f"Status: {model_info.get('status', 'Unknown')}"
+                f"📌 **Model Details**\n\n"
+                f"• Type: {model_info['type'].title()}\n"
+                f"• Device: {model_info.get('device', 'N/A')}\n"
+                f"• Status: {model_info.get('status', 'Unknown')}"
             )
     
-    with col2:
-        # API Key input for cloud models
-        api_key = None
-        if source == "Cloud":
-            api_key = st.text_input(
-                "API Key",
-                type="password",
-                help="Enter your API key for the selected cloud model"
-            )
+    if not st.session_state.get('model_loaded'):
+        st.warning("⚠️ Please load a model first to proceed with refactoring")
+        return
         
-        # Load model button
-        if st.button("Load Model", key="load_model_button"):
-            with st.spinner("Loading model..."):
-                success = model_manager.load_model(source, selected_model, api_key)
-                if success:
-                    st.session_state.model_loaded = True
-    
-    # File Selection Section (only if model is loaded)
-    if st.session_state.get('model_loaded'):
-        st.subheader("2. Select Java File")
+    # 2. File Selection
+    with st.expander("📁 File Selection", expanded=True):
+        st.markdown("### Select Java File to Refactor")
         
-        # Check if project is loaded
         if not st.session_state.project_manager.project_path:
-            st.warning("Please load a Java project first")
+            st.warning("⚠️ Please load a Java project first")
             return
         
-        # File selection
         java_files = st.session_state.project_manager.project_metadata.get("java_files", [])
         if not java_files:
-            st.warning("No Java files found in the project")
+            st.warning("⚠️ No Java files found in the project")
             return
         
         selected_file = st.selectbox(
-            "Select Java File",
+            "Choose File",
             options=[f["path"] for f in java_files],
-            help="Choose a Java file to refactor"
+            help="Select the Java file you want to refactor"
         )
         
         if selected_file:
-            # Find the full file info
             file_info = next((f for f in java_files if f["path"] == selected_file), None)
             if file_info:
                 try:
                     with open(file_info["full_path"], 'r', encoding='utf-8') as f:
                         file_content = f.read()
                     st.session_state.refactoring_file = file_info
-                    
-                    # Display original code
-                    st.code(file_content, language="java")
-                    
-                    # Code smell selection
-                    st.subheader("3. Select Code Smells")
-                    smells = st.multiselect(
-                        "Code Smells to Address",
-                        [
-                            "Long Method",
-                            "Large Class",
-                            "Duplicate Code",
-                            "Complex Conditionals",
-                            "Dead Code",
-                            "Magic Numbers",
-                            "Long Parameter List"
-                        ],
-                        help="Select the code smells you want to address"
-                    )
-                    
-                    # Generate refactoring
-                    if smells and st.button("Generate Refactoring"):
-                        with st.spinner("Generating refactored code..."):
-                            try:
-                                refactored_code, metadata = model_manager.generate_refactoring(
-                                    file_content, smells
-                                )
-                                st.session_state.refactored_code = refactored_code
-                                st.session_state.refactoring_metadata = metadata
-                                
-                                # Display results
-                                st.subheader("4. Review Changes")
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    st.markdown("**Original Code**")
-                                    st.code(file_content, language="java")
-                                with col2:
-                                    st.markdown("**Refactored Code**")
-                                    st.code(refactored_code, language="java")
-                                
-                                # Show metadata
-                                if metadata:
-                                    st.subheader("Refactoring Details")
-                                    st.json(metadata)
-                                
-                                # Apply changes button
-                                if st.button("Apply Changes"):
-                                    with open(file_info["full_path"], 'w', encoding='utf-8') as f:
-                                        f.write(refactored_code)
-                                    st.success("Changes applied successfully!")
-                                    
-                            except Exception as e:
-                                st.error(f"Error during refactoring: {str(e)}")
+                    st.success("✅ File loaded successfully")
                 except Exception as e:
-                    st.error(f"Error reading file: {str(e)}")
-    else:
-        st.info("Please load a model first to proceed with refactoring")
+                    st.error(f"❌ Error reading file: {str(e)}")
+                    return
+    
+    # 3. Code Analysis
+    with st.expander("🔍 Code Analysis", expanded=True):
+        if not st.session_state.refactoring_file:
+            st.info("Select a file above to analyze its code")
+            return
+            
+        st.markdown("### Original Code")
+        st.code(file_content, language="java")
+        
+        # Detect code smells using the rule-based approach
+        from smell_detector.detector import detect_smells, compute_metrics
+        
+        # Prepare class data for smell detection
+        class_data = {
+            "class_name": st.session_state.refactoring_file["name"],
+            "content": file_content
+        }
+        
+        # Detect smells
+        smell_results = detect_smells([class_data])
+        detected_smells = smell_results[class_data["class_name"]]["smells"]
+        
+        st.markdown("### Detected Code Smells")
+        if detected_smells:
+            for smell in detected_smells:
+                reasoning = smell_results[class_data["class_name"]]["reasoning"][smell]
+                st.warning(f"⚠️ {smell}: {reasoning}")
+        else:
+            st.success("✅ No code smells detected in this file")
+        
+        # Show metrics
+        metrics = smell_results[class_data["class_name"]]["metrics"]
+        st.markdown("### Code Metrics")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Lines of Code", metrics["loc"])
+        with col2:
+            st.metric("Weighted Method Count", metrics["wmc"])
+        with col3:
+            st.metric("Public Methods", metrics["public_methods"])
+        
+        if detected_smells:
+            if st.button("Generate Refactoring", use_container_width=True):
+                with st.spinner("🔄 Analyzing code and generating suggestions..."):
+                    try:
+                        refactored_code, metadata = model_manager.generate_refactoring(
+                            file_content, detected_smells
+                        )
+                        st.session_state.refactored_code = refactored_code
+                        st.session_state.refactoring_metadata = metadata
+                        st.success("✨ Refactoring suggestions generated!")
+                    except Exception as e:
+                        st.error(f"❌ Error during refactoring: {str(e)}")
+                        return
+    
+    # 4. Refactoring Preview
+    with st.expander("👀 Refactoring Preview", expanded=True):
+        if not st.session_state.refactored_code:
+            st.info("Generate refactoring suggestions above to preview changes")
+            return
+            
+        st.markdown("### Code Comparison")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**Original Code**")
+            st.code(file_content, language="java")
+        with col2:
+            st.markdown("**Refactored Code**")
+            st.code(st.session_state.refactored_code, language="java")
+    
+    # 5. Details and Actions
+    with st.expander("📋 Details and Actions", expanded=True):
+        if not st.session_state.refactoring_metadata:
+            st.info("Generate refactoring suggestions to view details")
+            return
+            
+        st.markdown("### Refactoring Details")
+        st.json(st.session_state.refactoring_metadata)
+        
+        st.markdown("### Apply Changes")
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            if st.button("Apply Changes", use_container_width=True):
+                try:
+                    with open(st.session_state.refactoring_file["full_path"], 'w', encoding='utf-8') as f:
+                        f.write(st.session_state.refactored_code)
+                    st.success("✅ Changes applied successfully!")
+                except Exception as e:
+                    st.error(f"❌ Error applying changes: {str(e)}")
+        with col2:
+            st.info("⚠️ This will overwrite the original file. Make sure to review the changes carefully.")
 
 def render_testing_tab():
     """Render the Testing & Metrics tab content."""
