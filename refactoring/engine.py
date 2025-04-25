@@ -15,6 +15,7 @@ from abc import ABC, abstractmethod
 import yaml
 import time
 import re
+from openai import OpenAI
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -348,244 +349,253 @@ class ModelRegistry:
         return model_info
 
 class RefactoringEngine:
-    """Engine for code refactoring using LLMs."""
+    """Engine for code refactoring using language models."""
+    
     def __init__(self):
+        self.logger = logging.getLogger(__name__)
         self.model = None
         self.tokenizer = None
         self.model_name = None
-        self.device = "cpu"
-        self.memory_config = {}
-        self.logger = logging.getLogger(__name__)
-    
-    def _load_local_model(self, model_name: str) -> Tuple[bool, Optional[str]]:
-        """Load a local model with improved file handling and verification."""
+        self.device = None
+        self.api_key = None
+        self.source = None
+        
+    def load_model(self, source: str, model_name: str, api_key: Optional[str] = None, device: str = "cpu") -> Tuple[bool, str]:
+        """Load a model from the specified source."""
         try:
-            logger.info(f"Loading local model: {model_name}")
-            
-            # Set model name
+            self.source = source
             self.model_name = model_name
+            self.device = device
+            self.api_key = api_key
             
-            # Map friendly model names to their IDs
-            model_map = {
-                "Code Llama 13B": "codellama/CodeLlama-13b-hf",
-                "Code Llama 7B": "codellama/CodeLlama-7b-hf",
-                "Code Llama 34B": "codellama/CodeLlama-34b-hf"
+            if source == "Local":
+                return self._load_local_model()
+            elif source in ["Cloud", "Private Cloud"]:
+                return self._load_cloud_model()
+            else:
+                return False, f"Invalid source: {source}"
+                
+        except Exception as e:
+            error_msg = f"Error loading model: {str(e)}"
+            self.logger.error(error_msg)
+            return False, error_msg
+    
+    def _load_local_model(self) -> Tuple[bool, str]:
+        """Load a local model."""
+        try:
+            # Map model names to HuggingFace model IDs
+            model_mapping = {
+                "Code Llama 7B": "TheBloke/CodeLlama-7B-Python-GGUF",
+                "Code Llama 13B": "TheBloke/CodeLlama-13B-Python-GGUF"
             }
             
-            model_id = model_map.get(model_name)
+            model_id = model_mapping.get(self.model_name)
             if not model_id:
-                error_msg = f"Unknown model: {model_name}"
-                logger.error(error_msg)
-                return False, error_msg
+                return False, f"Unknown model: {self.model_name}"
             
-            # Check model files
-            model_path = Path("models") / model_name.lower().replace(" ", "-")
-            config_file = model_path / "config.yaml"
+            # Check for HF token
+            hf_token = os.getenv("HF_TOKEN")
+            if not hf_token:
+                return False, "Hugging Face token not found. Please set HF_TOKEN environment variable."
             
-            if not config_file.exists():
-                error_msg = f"Config file not found: {config_file}"
-                logger.error(error_msg)
-                return False, error_msg
+            # Configure model loading
+            config = {
+                "device_map": "auto" if self.device == "cuda" else None,
+                "torch_dtype": torch.float16 if self.device == "cuda" else torch.float32,
+                "low_cpu_mem_usage": True,
+                "trust_remote_code": True
+            }
             
-            try:
-                with open(config_file) as f:
-                    config = yaml.safe_load(f)
-            except Exception as e:
-                error_msg = f"Error loading config: {str(e)}"
-                logger.error(error_msg)
-                return False, error_msg
+            # Load tokenizer
+            self.logger.info(f"Loading tokenizer for {model_id}")
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                model_id,
+                token=hf_token,
+                trust_remote_code=True
+            )
             
-            # Verify model files
-            required_files = config.get("model_files", [])
-            model_files = []
-            for file in required_files:
-                file_path = model_path / file
-                if not file_path.exists():
-                    error_msg = f"Model file not found: {file_path}"
-                    logger.error(error_msg)
-                    return False, error_msg
-                model_files.append(file_path)
+            # Load model
+            self.logger.info(f"Loading model {model_id} on {self.device}")
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_id,
+                token=hf_token,
+                **config
+            )
             
-            # Load tokenizer with improved error handling
-            try:
-                logger.info("Loading tokenizer...")
-                self.tokenizer = AutoTokenizer.from_pretrained(
-                    str(model_path),
-                    trust_remote_code=True,
-                    use_fast=False  # Disable fast tokenizer for better compatibility
-                )
-                
-                # Ensure pad token is set
-                if self.tokenizer.pad_token is None:
-                    self.tokenizer.pad_token = self.tokenizer.eos_token
-                    logger.info("Set pad token to EOS token")
-                
-            except Exception as e:
-                error_msg = f"Error loading tokenizer: {str(e)}"
-                logger.error(error_msg)
-                return False, error_msg
+            # Move model to device if needed
+            if self.device == "mps":
+                self.model = self.model.to("mps")
+            elif self.device == "cpu":
+                self.model = self.model.to("cpu")
             
-            # Load model with improved memory handling
-            try:
-                logger.info("Loading model...")
-                
-                # Get device-specific configuration
-                device = self.device
-                if device == "mps":
-                    logger.info("Using MPS-specific configuration")
-                    # Force CPU memory for MPS
-                    self.model = AutoModelForCausalLM.from_pretrained(
-                        str(model_path),
-                        torch_dtype=torch.float32,  # MPS requires float32
-                        device_map=None,  # Manual device management
-                        low_cpu_mem_usage=True,
-                        trust_remote_code=True
-                    )
-                    # Move to MPS after loading
-                    self.model = self.model.to(device)
-                else:
-                    self.model = AutoModelForCausalLM.from_pretrained(
-                        str(model_path),
-                        **self.memory_config,
-                        trust_remote_code=True
-                    )
-                
-                # Set model to evaluation mode
-                self.model.eval()
-                
-                # Test model with a simple prompt
-                test_prompt = "def hello():"
-                inputs = self.tokenizer(test_prompt, return_tensors="pt").to(device)
-                with torch.no_grad():
-                    _ = self.model.generate(
-                        inputs["input_ids"],
-                        max_length=10,
-                        temperature=0.7,
-                        top_p=0.95
-                    )
-                
-                logger.info(f"Model loaded successfully on {device}")
-                return True, None
-                
-            except Exception as e:
-                error_msg = f"Error loading model: {str(e)}"
-                logger.error(error_msg)
-                return False, error_msg
-                
+            self.logger.info(f"Model {self.model_name} loaded successfully")
+            return True, "Model loaded successfully"
+            
         except Exception as e:
-            error_msg = f"Error in _load_local_model: {str(e)}"
-            logger.error(error_msg)
+            error_msg = f"Error loading local model: {str(e)}"
+            self.logger.error(error_msg)
+            return False, error_msg
+    
+    def _load_cloud_model(self) -> Tuple[bool, str]:
+        """Load a cloud model configuration."""
+        try:
+            if not self.api_key:
+                return False, "API key required for cloud models"
+            
+            # Just set the API key for cloud models
+            os.environ[f"{self.source.upper()}_API_KEY"] = self.api_key
+            return True, "Cloud model configured successfully"
+            
+        except Exception as e:
+            error_msg = f"Error configuring cloud model: {str(e)}"
+            self.logger.error(error_msg)
             return False, error_msg
 
-    def _load_cloud_model(self, model_name: str, api_key: Optional[str] = None) -> bool:
-        """Load a cloud model."""
-        try:
-            if not api_key:
-                self.logger.error("API key required for cloud models")
-                return False
-            
-            self.api_key = api_key
-            self.model_name = model_name
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Error loading cloud model: {str(e)}")
-            return False
-            
-    def load_model(self, source: str, model_name: str, api_key: Optional[str] = None, 
-                  device: str = "cpu", **memory_config) -> Tuple[bool, Optional[str]]:
-        """Load a model for code refactoring."""
-        try:
-            self.device = device
-            self.memory_config = memory_config
-            self.logger = logging.getLogger(__name__)
-            
-            # Log configuration
-            self.logger.info(f"Loading model {model_name} from {source}")
-            self.logger.info(f"Device: {device}")
-            self.logger.info(f"Memory config: {memory_config}")
-            
-            # Normalize source
-            source = source.lower()
-            
-            # Handle different model sources
-            if source == "local":
-                return self._load_local_model(model_name)
-            elif source == "cloud":
-                return self._load_cloud_model(model_name, api_key)
-            else:
-                return False, f"❌ Unknown model source: {source}"
-                
-        except Exception as e:
-            self.logger.error(f"Error in load_model: {str(e)}", exc_info=True)
-            return False, f"❌ Error in load_model: {str(e)}"
-    
     def refactor_code(self, code: str, smells: List[str]) -> Tuple[str, Dict]:
-        """Refactor code to address specified smells."""
+        """Refactor code using the loaded model."""
         try:
-            if not self.model or not self.tokenizer:
-                raise RuntimeError("Model not loaded")
-            
-            # Create prompt
+            # Check model state
+            if self.source == "local":
+                if not self.model or not self.tokenizer:
+                    raise RuntimeError("Model or tokenizer not loaded. Please load a model first.")
+            elif self.source in ["cloud", "private cloud"]:
+                if not self.api_key:
+                    raise RuntimeError("API key not set for cloud model.")
+            else:
+                raise RuntimeError(f"Invalid model source: {self.source}")
+
+            # Create refactoring prompt
             prompt = self._create_refactoring_prompt(code, smells)
             
             # Generate refactored code
-            if self.model_name.startswith("gpt") or self.model_name.startswith("claude"):
-                return self._generate_cloud_refactoring(prompt)
+            if self.source == "local":
+                refactored_code = self._generate_local(prompt)
             else:
-                return self._generate_local_refactoring(prompt)
-                
-        except Exception as e:
-            self.logger.error(f"Error during refactoring: {str(e)}")
-            return code, {"error": str(e), "success": False}
-    
-    def _generate_local_refactoring(self, prompt: str) -> Tuple[str, Dict]:
-        """Generate refactored code using local model."""
-        try:
-            # Tokenize input
-            inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+                refactored_code = self._generate_cloud(prompt)
             
-            # Generate
-            start_time = time.time()
-            outputs = self.model.generate(
-                **inputs,
-                max_length=2048,
-                temperature=0.7,
-                top_p=0.95,
-                do_sample=True
-            )
-            generation_time = time.time() - start_time
+            # Extract code and metadata
+            result = self._extract_code_from_response(refactored_code)
             
-            # Decode output
-            refactored_code = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            
-            # Extract code from response
-            code_match = re.search(r"```(?:java)?\n(.*?)\n```", refactored_code, re.DOTALL)
-            if code_match:
-                refactored_code = code_match.group(1).strip()
-            
-            return refactored_code, {
-                "success": True,
-                "generation_time": generation_time,
+            # Return results
+            return result["code"], {
                 "model": self.model_name,
-                "device": self.device
+                "source": self.source,
+                "smells_addressed": smells,
+                "changes": result.get("changes", []),
+                "reasoning": result.get("reasoning", "")
             }
             
         except Exception as e:
-            self.logger.error(f"Error in local generation: {str(e)}")
-            return "", {"error": str(e), "success": False}
-    
-    def _generate_cloud_refactoring(self, prompt: str) -> Tuple[str, Dict]:
-        """Generate refactored code using cloud API."""
-        # Implementation depends on the cloud provider
-        # This is a placeholder for the actual implementation
-        return "", {"error": "Cloud generation not implemented", "success": False}
-    
+            error_msg = f"Error during refactoring: {str(e)}"
+            self.logger.error(error_msg)
+            return code, {
+                "error": error_msg,
+                "model": self.model_name,
+                "source": self.source,
+                "smells_addressed": smells
+            }
+
+    def _generate_local(self, prompt: str) -> str:
+        """Generate code using local model."""
+        try:
+            inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048)
+            inputs = inputs.to(self.device)
+            
+            with torch.no_grad():
+                outputs = self.model.generate(
+                    inputs["input_ids"],
+                    max_length=4096,
+                    temperature=0.7,
+                    top_p=0.95,
+                    do_sample=True,
+                    num_return_sequences=1,
+                    pad_token_id=self.tokenizer.eos_token_id
+                )
+            
+            return self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+            
+        except Exception as e:
+            raise RuntimeError(f"Error in local generation: {str(e)}")
+
+    def _generate_cloud(self, prompt: str) -> str:
+        """Generate code using cloud API."""
+        try:
+            # Configure API client based on source
+            if self.source == "cloud":
+                client = OpenAI(api_key=self.api_key)
+                response = client.chat.completions.create(
+                    model=self.model_name,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.7,
+                    max_tokens=4096
+                )
+                return response.choices[0].message.content
+            else:  # private cloud
+                # Add implementation for private cloud API
+                raise NotImplementedError("Private cloud API not implemented yet")
+                
+        except Exception as e:
+            raise RuntimeError(f"Error in cloud generation: {str(e)}")
+
+    def _extract_code_from_response(self, response: str) -> Dict:
+        """Extract code and metadata from model response."""
+        try:
+            # Initialize result
+            result = {
+                "code": "",
+                "changes": [],
+                "reasoning": ""
+            }
+            
+            # Extract code block
+            code_pattern = r"```(?:java)?\n(.*?)```"
+            code_matches = re.findall(code_pattern, response, re.DOTALL)
+            
+            if code_matches:
+                result["code"] = code_matches[0].strip()
+            else:
+                # Fallback: try to extract any code-like content
+                lines = response.split("\n")
+                code_lines = []
+                in_code = False
+                
+                for line in lines:
+                    if line.strip().startswith("public") or line.strip().startswith("private") or line.strip().startswith("class"):
+                        in_code = True
+                    if in_code:
+                        code_lines.append(line)
+                
+                if code_lines:
+                    result["code"] = "\n".join(code_lines)
+                else:
+                    result["code"] = response  # Use full response if no code found
+            
+            # Extract reasoning (if any)
+            reasoning_pattern = r"(?:Reasoning|Changes made|Explanation):(.*?)(?:```|$)"
+            reasoning_match = re.search(reasoning_pattern, response, re.DOTALL | re.IGNORECASE)
+            if reasoning_match:
+                result["reasoning"] = reasoning_match.group(1).strip()
+            
+            # Extract changes (if any)
+            changes_pattern = r"(?:Changes|Modifications):\s*\n((?:[-*]\s*[^\n]+\n)*)"
+            changes_match = re.search(changes_pattern, response, re.IGNORECASE)
+            if changes_match:
+                changes = re.findall(r"[-*]\s*([^\n]+)", changes_match.group(1))
+                result["changes"] = changes
+            
+            return result
+            
+        except Exception as e:
+            self.logger.warning(f"Error extracting code from response: {str(e)}")
+            return {"code": response, "changes": [], "reasoning": ""}
+
     def _create_refactoring_prompt(self, code: str, smells: List[str]) -> str:
-        """Create a prompt for code refactoring."""
+        """Create a detailed prompt for code refactoring."""
         smell_instructions = self._format_smell_instructions(smells)
         
-        return f"""Please refactor the following Java code to address these code smells:
+        return f"""You are an expert Java developer tasked with refactoring code to improve its quality.
+Please analyze and refactor the following Java code to address these code smells:
+
 {smell_instructions}
 
 Original code:
@@ -593,26 +603,68 @@ Original code:
 {code}
 ```
 
-Please provide the refactored code that:
-1. Maintains the same functionality
-2. Addresses the specified code smells
-3. Follows Java best practices
-4. Is well-documented
+Please provide a refactored version that:
+1. Maintains the exact same functionality and behavior
+2. Addresses each identified code smell using appropriate refactoring patterns
+3. Follows Java best practices and design principles
+4. Is well-documented with clear comments explaining complex logic
+5. Uses meaningful variable and method names
+6. Has proper error handling and input validation
+7. Is modular and follows the Single Responsibility Principle
+
+For each refactoring change, please:
+1. Explain the specific changes made to address each smell
+2. Describe the refactoring patterns used
+3. Highlight any potential impacts on other parts of the codebase
 
 Refactored code:
 ```java
 """
     
     def _format_smell_instructions(self, smells: List[str]) -> str:
-        """Format instructions for each code smell."""
+        """Format detailed instructions for each code smell."""
         instructions = {
-            "Long Method": "Break down the method into smaller, focused methods",
-            "Large Class": "Split the class into smaller, cohesive classes",
-            "Duplicate Code": "Extract common code into reusable methods",
-            "Complex Conditionals": "Simplify complex if-else statements",
-            "Dead Code": "Remove unused code and methods",
-            "Magic Numbers": "Replace magic numbers with named constants",
-            "Long Parameter List": "Use parameter objects to group related parameters"
+            "God Class": """- God Class: The class is too large and has too many responsibilities
+  * Split the class into smaller, focused classes
+  * Extract related functionality into separate classes
+  * Use composition to delegate responsibilities
+  * Consider applying the Single Responsibility Principle""",
+            
+            "Data Class": """- Data Class: The class primarily holds data with minimal behavior
+  * Add meaningful behavior to the class
+  * Consider making it a proper DTO if it's meant for data transfer
+  * Add validation and business logic where appropriate
+  * Consider using the Builder pattern for complex object creation""",
+            
+            "Lazy Class": """- Lazy Class: The class has too little responsibility
+  * Consider merging with parent class if inheritance is appropriate
+  * Move functionality to a more appropriate class
+  * Remove the class if it's truly unnecessary
+  * Consider using composition instead""",
+            
+            "Feature Envy": """- Feature Envy: Methods use more features of other classes than their own
+  * Move the method to the class it's most interested in
+  * Consider using the Move Method refactoring pattern
+  * Evaluate if the method belongs in a different class
+  * Use composition to access needed functionality""",
+            
+            "Refused Bequest": """- Refused Bequest: The class inherits but doesn't use inherited behavior
+  * Consider composition over inheritance
+  * Remove unused inherited methods
+  * Create a new base class with only the needed functionality
+  * Use interfaces instead of inheritance where appropriate""",
+            
+            "Long Method": """- Long Method: The method is too long and complex
+  * Break down into smaller, focused methods
+  * Extract repeated code into helper methods
+  * Use meaningful method names that describe their purpose
+  * Consider using the Extract Method refactoring pattern""",
+            
+            "Complex Conditionals": """- Complex Conditionals: The code has complex if-else statements
+  * Use guard clauses to handle edge cases early
+  * Extract complex conditions into well-named methods
+  * Consider using the Strategy pattern for complex logic
+  * Use switch statements or pattern matching where appropriate"""
         }
         
-        return "\n".join(f"- {smell}: {instructions.get(smell, 'Improve code quality')}" for smell in smells) 
+        return "\n\n".join(instructions.get(smell, f"- {smell}: Improve code quality and maintainability") for smell in smells) 

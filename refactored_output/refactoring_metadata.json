@@ -1,0 +1,25 @@
+{
+  "refactorings": [
+    {
+      "original_path": "/var/folders/wn/wfsv6t3147v_ws0nlb6qfms40000gr/T/tmpcow3rxdy/junit4-main/src/test/java/junit/tests/framework/AllTests.java",
+      "refactored_path": "refactored_output/var/folders/wn/wfsv6t3147v_ws0nlb6qfms40000gr/T/tmpcow3rxdy/junit4-main/src/test/java/junit/tests/framework/AllTests.java",
+      "timestamp": "2025-04-19T20:54:15.004206",
+      "size": 1042,
+      "source_file": "junit4-main/src/test/java/junit/tests/framework/AllTests.java"
+    },
+    {
+      "original_path": "/var/folders/wn/wfsv6t3147v_ws0nlb6qfms40000gr/T/tmpno0h2qd9/junit4-main/src/test/java/junit/tests/WasRun.java",
+      "refactored_path": "refactored_output/var/folders/wn/wfsv6t3147v_ws0nlb6qfms40000gr/T/tmpno0h2qd9/junit4-main/src/test/java/junit/tests/WasRun.java",
+      "timestamp": "2025-04-19T22:05:35.218252",
+      "size": 288,
+      "source_file": "junit4-main/src/test/java/junit/tests/WasRun.java"
+    },
+    {
+      "original_path": "/var/folders/wn/wfsv6t3147v_ws0nlb6qfms40000gr/T/tmpkyf1hzan/junit4-main/src/test/java/junit/tests/AllTests.java",
+      "refactored_path": "refactored_output/var/folders/wn/wfsv6t3147v_ws0nlb6qfms40000gr/T/tmpkyf1hzan/junit4-main/src/test/java/junit/tests/AllTests.java",
+      "timestamp": "2025-04-19T22:17:52.846405",
+      "size": 569,
+      "source_file": "junit4-main/src/test/java/junit/tests/AllTests.java"
+    }
+  ]
+}

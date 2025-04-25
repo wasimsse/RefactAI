@@ -1,0 +1,127 @@
+You are an expert Java code refactoring assistant. Please refactor the following Java code to improve its quality, maintainability, and readability. Follow these guidelines:
+
+1. Apply SOLID principles where applicable
+2. Improve code organization and structure
+3. Extract methods for better readability
+4. Use meaningful variable and method names
+5. Add appropriate comments for complex logic
+6. Optimize performance where possible
+7. Handle edge cases and add proper error handling
+8. Follow Java best practices and coding standards
+
+Original code:
+
+public class Calculator {
+    private int result;
+    
+    public int add(int a, int b) {
+        result = a + b;
+        return result;
+    }
+    
+    public int subtract(int a, int b) {
+        result = a - b;
+        return result;
+    }
+    
+    public int multiply(int a, int b) {
+        result = a * b;
+        return result;
+    }
+    
+    public int divide(int a, int b) {
+        if (b == 0) {
+            throw new ArithmeticException("Division by zero");
+        }
+        result = a / b;
+        return result;
+    }
+}
+
+
+Please provide the complete refactored code with explanations of the changes made. Here's my attempt at improving your original `Calculator` class using some common design patterns like Strategy Pattern or Command Design pattern.
+
+```java
+import java.util.function.BiFunction;
+
+/**
+* A simple calculator that performs basic arithmetic operations.
+*/
+class SimpleCalc {
+
+   // Define constants representing different types of calculations 
+   enum Operation { ADDITION, SUBTRACTION, MULTIPLICATION, DIVISION }
+
+   /**
+   * Performs given operation on two numbers provided as arguments.
+   
+   @param op The type of calculation to perform.
+   @return Result after performing specified operation between numA & numB .
+   */
+   static double calculate(Operation op,double... nums){
+      BiFunction<Double[],Double,BigDecimal> func=null; 
+
+     switch(op){  
+       case AD<|fim_suffix|>eption e){}
+         break ;
+         
+          default : System.out.println( "Invalid Operator");break ;       
+          
+           }      
+        
+        BigDecimal res=new BigDecimal(result);
+        return Double.parseDouble(res.toString());
+     
+}
+
+}
+```
+
+In this version I've used enums instead of hardcoding strings which makes it more readable especially when there is lot of such values in future . Also , i have replaced all primitive data-types into their wrapper classes so we can use them easily without worrying about null pointer exceptions etc..<|fim_middle|>DITION:func=(a,b)->new BigDecimal(a[0]).add(new BigDecimal(b));break ;
+
+       case SUBTRACTIONS:
+             func= (a,b )-> new BigDecimal(a [0 ]).subtract(new BigDecimal (b));
+              break ;
+
+
+                case MULITIPLCATION :
+                    func =(a,b ) -> new BigDecimal (a[0] ).multiply(new BigDecimal (
+                      b ));
+                     break;
+
+
+                   case Division :
+
+                       try{
+                           func=((a,b)->
+                             ((BigDecimal)a[0].divide(
+                               new BigDecimal((String)b),RoundingMode.HALF_UP)));
+                         }catch(Exception ex){
+
+                          System.err.print(ex.getMessage());}  
+
+                        break;
+
+
+
+                  defalut:System.out.println ("invalid operator");
+
+               }
+
+
+                 Object[] args={nums};
+                 
+               
+                
+                    
+                   
+                  
+              
+           
+             
+            
+
+            
+        
+
+try{result=func.apply(args).doubleValue();}// catch except

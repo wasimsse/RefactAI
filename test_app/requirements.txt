@@ -1,0 +1,12 @@
+streamlit==1.32.0
+torch==2.6.0
+transformers>=4.38.2
+accelerate==0.27.2
+safetensors==0.4.2
+bitsandbytes>=0.41.1
+requests==2.31.0
+python-dotenv==1.0.0
+sentencepiece==0.2.0
+protobuf==4.25.3
+einops==0.7.0
+optimum==1.17.1 

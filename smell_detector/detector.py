@@ -6,9 +6,13 @@ using rule-based analysis. It is designed to be modular and replaceable with
 more sophisticated static analysis tools in the future.
 """
 
+import logging
 from typing import Dict, List, Any, Tuple, Set
 from dataclasses import dataclass
 import re
+
+# Configure logger
+logger = logging.getLogger(__name__)
 
 # Thresholds for various metrics
 THRESHOLDS = {
@@ -192,57 +196,154 @@ def is_refused_bequest(metrics: ClassMetrics) -> Tuple[bool, str]:
     
     return is_refused, reasoning
 
-def detect_smells(classes: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+def detect_smells(classes: List[Dict]) -> Dict:
     """
     Detect code smells in Java classes.
-    
     Args:
         classes: List of dictionaries containing class information
-        
+                Each dict should have 'class_name' and 'content' keys
     Returns:
-        Dictionary mapping class names to detected smells and reasoning
+        Dictionary mapping class names to detected smells and metrics
     """
     results = {}
     
-    for class_data in classes:
-        class_name = class_data["class_name"]
-        metrics = compute_metrics(class_data)
-        
-        # Initialize results for this class
-        results[class_name] = {
-            "smells": [],
-            "reasoning": {},
-            "metrics": {
-                "loc": metrics.loc,
-                "wmc": metrics.wmc,
-                "public_methods": metrics.public_methods,
-                "total_methods": metrics.total_methods,
-                "accessor_methods": metrics.accessor_methods
+    try:
+        for class_data in classes:
+            class_name = class_data.get('class_name', '')
+            content = class_data.get('content', '')
+            
+            if not class_name or not content:
+                continue
+            
+            # Initialize results structure
+            results[class_name] = {
+                'smells': [],
+                'metrics': {},
+                'reasoning': {},
+                'metrics_evidence': {}
             }
-        }
-        
-        # Check for each type of smell
-        smell_checks = [
-            ("God Class", is_god_class),
-            ("Data Class", is_data_class),
-            ("Lazy Class", is_lazy_class),
-            ("Feature Envy", is_feature_envy),
-            ("Refused Bequest", is_refused_bequest)
-        ]
-        
-        for smell_name, check_func in smell_checks:
-            is_smell, reasoning = check_func(metrics)
-            if is_smell:
-                results[class_name]["smells"].append(smell_name)
-                results[class_name]["reasoning"][smell_name] = reasoning
-        
-        # Add placeholder for future smell types
-        results[class_name]["future_smells"] = {
-            "Inappropriate Intimacy": "Not implemented - requires dependency analysis",
-            "Divergent Change": "Not implemented - requires version history analysis",
-            "Shotgun Surgery": "Not implemented - requires impact analysis",
-            "Speculative Generality": "Not implemented - requires usage analysis",
-            "Data Clumps": "Not implemented - requires field usage analysis"
-        }
+            
+            # Calculate basic metrics
+            metrics = compute_metrics(class_data)
+            results[class_name]['metrics'] = metrics
+            
+            # Check for God Class
+            if metrics['wmc'] > 20 and metrics['loc'] > 200:
+                results[class_name]['smells'].append('God Class')
+                results[class_name]['reasoning']['God Class'] = 'High complexity and large size'
+                results[class_name]['metrics_evidence']['God Class'] = f"WMC = {metrics['wmc']} > 20, LOC = {metrics['loc']} > 200"
+            
+            # Check for Data Class
+            if metrics['getters_setters'] / max(metrics['total_methods'], 1) > 0.7:
+                results[class_name]['smells'].append('Data Class')
+                results[class_name]['reasoning']['Data Class'] = 'Contains mostly getters and setters'
+                results[class_name]['metrics_evidence']['Data Class'] = f"Getter/Setter ratio = {metrics['getters_setters']}/{metrics['total_methods']}"
+            
+            # Check for Lazy Class
+            if metrics['wmc'] < 3 and metrics['loc'] < 50:
+                results[class_name]['smells'].append('Lazy Class')
+                results[class_name]['reasoning']['Lazy Class'] = 'Low complexity and small size'
+                results[class_name]['metrics_evidence']['Lazy Class'] = f"WMC = {metrics['wmc']} < 3, LOC = {metrics['loc']} < 50"
+            
+            # Check for Feature Envy
+            if metrics['external_method_calls'] > metrics['internal_method_calls'] * 2:
+                results[class_name]['smells'].append('Feature Envy')
+                results[class_name]['reasoning']['Feature Envy'] = 'High external coupling'
+                results[class_name]['metrics_evidence']['Feature Envy'] = f"External calls = {metrics['external_method_calls']} > 2 * Internal calls = {metrics['internal_method_calls']}"
+            
+            # Check for Refused Bequest
+            if metrics['inherited_methods'] > 0 and metrics['overridden_methods'] / metrics['inherited_methods'] < 0.3:
+                results[class_name]['smells'].append('Refused Bequest')
+                results[class_name]['reasoning']['Refused Bequest'] = 'Low usage of inherited methods'
+                results[class_name]['metrics_evidence']['Refused Bequest'] = f"Overridden/Inherited ratio = {metrics['overridden_methods']}/{metrics['inherited_methods']}"
     
-    return results 
+    except Exception as e:
+        logger.error(f"Error in detect_smells: {str(e)}")
+        # Return empty results for the failed class
+        if class_name:
+            results[class_name] = {
+                'smells': [],
+                'metrics': compute_metrics(content) if content else {},
+                'reasoning': {},
+                'metrics_evidence': {},
+                'error': str(e)
+            }
+    
+    return results
+
+def compute_metrics(content: str) -> Dict[str, int]:
+    """
+    Compute various metrics for a Java class.
+    Args:
+        content: String containing Java class code
+    Returns:
+        Dictionary of computed metrics
+    """
+    try:
+        # Initialize metrics
+        metrics = {
+            'loc': 0,                    # Lines of code
+            'wmc': 0,                    # Weighted methods per class
+            'total_methods': 0,          # Total number of methods
+            'public_methods': 0,         # Number of public methods
+            'private_methods': 0,        # Number of private methods
+            'getters_setters': 0,        # Number of getters and setters
+            'external_method_calls': 0,  # Calls to external methods
+            'internal_method_calls': 0,  # Calls to internal methods
+            'inherited_methods': 0,      # Number of inherited methods
+            'overridden_methods': 0,     # Number of overridden methods
+            'used_methods': 0            # Number of used inherited methods
+        }
+        
+        # Count lines of code (excluding comments and blank lines)
+        lines = content.split('\n')
+        metrics['loc'] = len([line for line in lines if line.strip() and not line.strip().startswith('//')])
+        
+        # Count methods
+        method_pattern = r'(?:public|private|protected)\s+(?:static\s+)?[\w\<\>\[\]]+\s+(\w+)\s*\([^\)]*\)\s*(?:throws\s+[\w\s,]+\s*)?{'
+        methods = re.finditer(method_pattern, content)
+        
+        for method in methods:
+            metrics['total_methods'] += 1
+            method_name = method.group(1)
+            
+            # Check method visibility
+            if 'public' in method.group(0):
+                metrics['public_methods'] += 1
+            elif 'private' in method.group(0):
+                metrics['private_methods'] += 1
+            
+            # Check for getters and setters
+            if method_name.startswith('get') or method_name.startswith('set'):
+                metrics['getters_setters'] += 1
+        
+        # Calculate WMC (using cyclomatic complexity)
+        metrics['wmc'] = len(re.findall(r'\b(if|for|while|case)\b', content))
+        
+        # Count method calls
+        method_calls = re.findall(r'(\w+)\s*\([^\)]*\)', content)
+        internal_methods = set(re.findall(method_pattern, content))
+        
+        for call in method_calls:
+            if call in internal_methods:
+                metrics['internal_method_calls'] += 1
+            else:
+                metrics['external_method_calls'] += 1
+        
+        return metrics
+        
+    except Exception as e:
+        logger.error(f"Error computing metrics: {str(e)}")
+        return {
+            'loc': 0,
+            'wmc': 0,
+            'total_methods': 0,
+            'public_methods': 0,
+            'private_methods': 0,
+            'getters_setters': 0,
+            'external_method_calls': 0,
+            'internal_method_calls': 0,
+            'inherited_methods': 0,
+            'overridden_methods': 0,
+            'used_methods': 0
+        } 

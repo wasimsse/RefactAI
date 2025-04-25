@@ -442,7 +442,17 @@ class ModelManager:
             model_info = self.available_models[model_name]
             self.logger.info(f"Model info: {model_info}")
             
-            # Get memory configuration
+            # Handle GPTlab models
+            if model_info.get("provider") == "gptlab":
+                self.logger.info("Loading GPTlab model")
+                self.model_loaded = True
+                self.current_model = model_info
+                success_msg = f"✅ GPTlab model {model_name} loaded successfully"
+                self.logger.info(success_msg)
+                st.success(success_msg)
+                return True
+            
+            # Get memory configuration for local models
             config = self._get_memory_config()
             self.logger.info(f"Memory config: {config}")
             
@@ -517,8 +527,6 @@ class ModelManager:
             error_msg = f"Error loading model: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
             st.error(error_msg)
-            self.model_loaded = False
-            self.current_model = None
             return False
     
     def _discover_models(self) -> Dict[str, Dict]:
@@ -622,6 +630,15 @@ class ModelManager:
         }
         models.update(cloud_models)
         
+        # Add GPTlab models
+        try:
+            from gptlab_integration import get_gptlab_models
+            gptlab_models = get_gptlab_models()
+            self.logger.info(f"Found {len(gptlab_models)} GPTlab models")
+            models.update(gptlab_models)
+        except Exception as e:
+            self.logger.error(f"Error loading GPTlab models: {str(e)}")
+        
         self.logger.info(f"Model discovery complete. Found {len(models)} models.")
         return models
     
@@ -643,7 +660,20 @@ class ModelManager:
             
             # Generate with resource monitoring
             with self.resource_monitor.monitor_generation():
-                refactored_code, metadata = self.engine.refactor_code(code, smells)
+                # Check if it's a GPTlab model
+                if self.current_model and self.current_model.get("provider") == "gptlab":
+                    from gptlab_integration import refactor_with_gptlab
+                    refactored_code = refactor_with_gptlab(code, self.current_model["name"], smells)
+                    if refactored_code is None:
+                        raise RuntimeError("GPTlab refactoring failed")
+                    metadata = {
+                        "model": self.current_model["name"],
+                        "provider": "gptlab",
+                        "success": True
+                    }
+                else:
+                    # Use default refactoring engine
+                    refactored_code, metadata = self.engine.refactor_code(code, smells)
             
             # Add resource usage to metadata
             metadata["resource_usage"] = self.resource_monitor.get_generation_stats()
@@ -1808,8 +1838,8 @@ def render_refactoring_tab():
         with col1:
             source = st.radio(
                 "Model Source",
-                ["Local", "Cloud"],
-                help="Choose between locally installed models or cloud-based models",
+                ["Local", "Cloud", "Private Cloud"],
+                help="Choose between locally installed models, cloud-based models, or GPTlab private cloud",
                 horizontal=True
             )
             
@@ -1817,12 +1847,16 @@ def render_refactoring_tab():
             available_models = {
                 name: info for name, info in model_manager.available_models.items()
                 if (info["type"] == "local" and source == "Local") or 
-                   (info["type"] == "cloud" and source == "Cloud")
+                   (info["type"] == "cloud" and source == "Cloud") or
+                   (info.get("provider") == "gptlab" and source == "Private Cloud")
             }
             
             model_names = list(available_models.keys())
             if not model_names:
-                st.warning(f"No {'local' if source == 'Local' else 'cloud'} models available")
+                if source == "Private Cloud":
+                    st.warning("No GPTlab models available. Please check your connection to the GPTlab server.")
+                else:
+                    st.warning(f"No {'local' if source == 'Local' else 'cloud'} models available")
                 return
             
             selected_model = st.selectbox(
@@ -1833,11 +1867,12 @@ def render_refactoring_tab():
         
         with col2:
             api_key = None
-            if source == "Cloud":
+            if source in ["Cloud", "Private Cloud"]:
                 api_key = st.text_input(
                     "API Key",
                     type="password",
-                    help="Enter your API key for the selected cloud model"
+                    value=os.getenv("OPENAI_API_KEY", "") if source == "Private Cloud" else "",
+                    help="Enter your API key for the selected model"
                 )
             
             if st.button("Load Model", key="load_model_button", use_container_width=True):
@@ -1850,10 +1885,15 @@ def render_refactoring_tab():
         # Show model info if selected
         if selected_model:
             model_info = available_models[selected_model]
+            provider = model_info.get("provider", "Unknown")
+            device = model_info.get("device", "N/A")
+            if provider == "gptlab":
+                device = "GPTlab Server"
             st.info(
                 f"📌 **Model Details**\n\n"
                 f"• Type: {model_info['type'].title()}\n"
-                f"• Device: {model_info.get('device', 'N/A')}\n"
+                f"• Provider: {provider.title()}\n"
+                f"• Device: {device}\n"
                 f"• Status: {model_info.get('status', 'Unknown')}"
             )
     

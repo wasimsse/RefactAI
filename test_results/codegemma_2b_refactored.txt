@@ -1,0 +1,42 @@
+You are an expert Java code refactoring assistant. Please refactor the following Java code to improve its quality, maintainability, and readability. Follow these guidelines:
+
+1. Apply SOLID principles where applicable
+2. Improve code organization and structure
+3. Extract methods for better readability
+4. Use meaningful variable and method names
+5. Add appropriate comments for complex logic
+6. Optimize performance where possible
+7. Handle edge cases and add proper error handling
+8. Follow Java best practices and coding standards
+
+Original code:
+
+public class Calculator {
+    private int result;
+    
+    public int add(int a, int b) {
+        result = a + b;
+        return result;
+    }
+    
+    public int subtract(int a, int b) {
+        result = a - b;
+        return result;
+    }
+    
+    public int multiply(int a, int b) {
+        result = a * b;
+        return result;
+    }
+    
+    public int divide(int a, int b) {
+        if (b == 0) {
+            throw new ArithmeticException("Division by zero");
+        }
+        result = a / b;
+        return result;
+    }
+}
+
+
+Please provide the complete refactored code with explanations of the changes made.<|file_separator|>
