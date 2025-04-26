@@ -1789,8 +1789,8 @@ def render_detection_tab():
             return
 
 def render_refactoring_tab():
-    """Render the refactoring tab content."""
-    st.header("Generate Refactoring", help="Generate refactoring suggestions for your code")
+    """Render the refactoring tab content with advanced features and professional UI."""
+    st.header("🛠️ Code Refactoring", help="AI-powered code refactoring with GPTlab")
 
     # Check if project is loaded
     if not st.session_state.project_manager.project_path:
@@ -1803,67 +1803,160 @@ def render_refactoring_tab():
         st.warning("⚠️ No Java files found in the project.")
         return
 
-    # Hardware selection
-    endpoints = list(GPTLAB_ENDPOINTS.keys())
-    selected_endpoint = st.selectbox(
-        "Select Hardware",
-        endpoints,
-        index=endpoints.index("RANDOM") if "RANDOM" in endpoints else 0,
-        help="Choose the hardware resource to use for refactoring"
-    )
+    # Create two columns for configuration
+    col1, col2 = st.columns([2, 1])
 
-    # Show endpoint details
-    if selected_endpoint:
-        endpoint_info = GPTLAB_ENDPOINTS[selected_endpoint]
-        st.info(
-            f"📌 **Selected Hardware**\n\n"
-            f"• Resource: {selected_endpoint}\n"
-            f"• Hardware: {endpoint_info['hardware']}\n"
-            f"• Description: {endpoint_info['description']}"
+    with col1:
+        # File selection with search and filtering
+        st.subheader("📁 Source Selection")
+        
+        # Search box for files
+        search_query = st.text_input(
+            "🔍 Search files",
+            placeholder="Enter filename or path...",
+            help="Filter files by name or path"
         )
 
-    # File selection
-    selected_file = st.selectbox(
-        "Select File to Refactor",
-        options=java_files,
-        format_func=lambda x: x["path"],
-        help="Choose which Java file to refactor"
-    )
+        # Get unique directories for filtering
+        directories = {str(Path(f["path"]).parent) for f in java_files}
+        selected_dir = st.selectbox(
+            "📂 Filter by Directory",
+            ["All Directories"] + sorted(list(directories)),
+            help="Filter files by directory"
+        )
 
-    # Code smell selection
-    st.subheader("🎯 Target Smells")
-    selected_smells = []
-    smell_options = {
-        "God Class": "Large class that does too much",
-        "Feature Envy": "Method uses more features of another class",
-        "Data Class": "Class with only data and no behavior",
-        "Long Method": "Method is too long and complex",
-        "Complex Class": "Class with high cyclomatic complexity"
-    }
+        # Filter files based on search and directory
+        filtered_files = [
+            f for f in java_files
+            if (not search_query or search_query.lower() in f["path"].lower()) and
+               (selected_dir == "All Directories" or str(Path(f["path"]).parent) == selected_dir)
+        ]
+
+        # File selection
+        selected_file = st.selectbox(
+            "Select File to Refactor",
+            options=filtered_files,
+            format_func=lambda x: x["path"],
+            help="Choose which Java file to refactor"
+        )
+
+    with col2:
+        # Hardware and Model Configuration
+        st.subheader("⚙️ Configuration")
+        
+        # Hardware selection
+        endpoints = list(GPTLAB_ENDPOINTS.keys())
+        selected_endpoint = st.selectbox(
+            "Select Hardware",
+            endpoints,
+            index=endpoints.index("RANDOM") if "RANDOM" in endpoints else 0,
+            help="Choose the hardware resource to use for refactoring"
+        )
+
+        # Show endpoint details
+        if selected_endpoint:
+            endpoint_info = GPTLAB_ENDPOINTS[selected_endpoint]
+            st.info(
+                f"📌 **Selected Resource**\n\n"
+                f"• Hardware: {endpoint_info['hardware']}\n"
+                f"• Description: {endpoint_info['description']}"
+            )
+
+        # Advanced Options
+        with st.expander("🔧 Advanced Options", expanded=False):
+            temperature = st.slider(
+                "Temperature",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.2,
+                step=0.1,
+                help="Higher values make output more creative, lower values more conservative"
+            )
+            max_tokens = st.slider(
+                "Max Response Length",
+                min_value=1000,
+                max_value=8192,
+                value=4096,
+                step=1000,
+                help="Maximum length of the refactored code"
+            )
+
+    # Code Smell Selection
+    st.subheader("🎯 Refactoring Targets")
     
-    cols = st.columns(3)
-    for i, (smell, description) in enumerate(smell_options.items()):
-        with cols[i % 3]:
-            if st.checkbox(smell, help=description):
-                selected_smells.append(smell)
+    # Organize code smells into categories
+    smell_categories = {
+        "Size-Related": {
+            "God Class": "Large class that does too much",
+            "Long Method": "Method is too long and complex"
+        },
+        "Coupling & Cohesion": {
+            "Feature Envy": "Method uses more features of another class",
+            "Data Class": "Class with only data and no behavior"
+        },
+        "Complexity": {
+            "Complex Class": "Class with high cyclomatic complexity",
+            "Duplicate Code": "Similar code structure repeated"
+        }
+    }
 
-    # Show file content and refactoring button
+    selected_smells = []
+    cols = st.columns(len(smell_categories))
+    
+    for i, (category, smells) in enumerate(smell_categories.items()):
+        with cols[i]:
+            st.markdown(f"**{category}**")
+            for smell, description in smells.items():
+                if st.checkbox(smell, help=description):
+                    selected_smells.append(smell)
+
+    # Show file content and refactoring options
     if selected_file:
         try:
             with open(selected_file["full_path"], 'r', encoding='utf-8') as f:
                 file_content = f.read()
             
+            # File Statistics
+            st.subheader("📊 File Analysis")
+            stats_col1, stats_col2, stats_col3, stats_col4 = st.columns(4)
+            
+            with stats_col1:
+                st.metric("Lines of Code", len(file_content.splitlines()))
+            with stats_col2:
+                st.metric("Classes", len(re.findall(r'class\s+\w+', file_content)))
+            with stats_col3:
+                st.metric("Methods", len(re.findall(r'(public|private|protected)\s+\w+\s+\w+\s*\(', file_content)))
+            with stats_col4:
+                st.metric("Complexity", len(re.findall(r'\b(if|for|while|catch)\b', file_content)))
+
+            # Code Display with Syntax Highlighting
+            st.subheader("📝 Source Code")
             st.code(file_content, language="java")
 
-            if st.button("🔄 Generate Refactoring", use_container_width=True):
+            # Refactoring Action
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                refactor_button = st.button(
+                    "🔄 Generate Refactoring",
+                    use_container_width=True,
+                    help="Generate refactoring suggestions using selected configuration"
+                )
+            with col2:
+                preview_diff = st.checkbox(
+                    "Preview Diff",
+                    value=True,
+                    help="Show side-by-side comparison of changes"
+                )
+
+            if refactor_button:
                 if not selected_smells:
-                    st.warning("Please select at least one code smell to address.")
+                    st.warning("⚠️ Please select at least one code smell to address.")
                     return
 
-                with st.spinner("Generating refactoring suggestions..."):
+                with st.spinner("🔄 Generating refactoring suggestions..."):
                     refactored_code = refactor_with_gptlab(
                         code=file_content,
-                        model_name="llama3.2",  # Using default Ollama model
+                        model_name="llama3.2",
                         endpoint=selected_endpoint,
                         smells=selected_smells
                     )
@@ -1871,29 +1964,49 @@ def render_refactoring_tab():
                     if refactored_code:
                         st.success("✅ Refactoring generated successfully!")
                         
-                        # Show diff
-                        st.subheader("📝 Changes")
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.markdown("**Original Code**")
-                            st.code(file_content, language="java")
-                        with col2:
-                            st.markdown("**Refactored Code**")
+                        # Show changes
+                        st.subheader("📝 Proposed Changes")
+                        
+                        if preview_diff:
+                            # Side-by-side comparison
+                            diff_col1, diff_col2 = st.columns(2)
+                            with diff_col1:
+                                st.markdown("**Original Code**")
+                                st.code(file_content, language="java")
+                            with diff_col2:
+                                st.markdown("**Refactored Code**")
+                                st.code(refactored_code, language="java")
+                        else:
+                            # Show only refactored code
                             st.code(refactored_code, language="java")
 
-                        # Apply changes button
-                        if st.button("✅ Apply Changes", use_container_width=True):
-                            try:
-                                with open(selected_file["full_path"], 'w', encoding='utf-8') as f:
-                                    f.write(refactored_code)
-                                st.success("Changes applied successfully!")
-                            except Exception as e:
-                                st.error(f"Error applying changes: {str(e)}")
+                        # Action buttons
+                        action_col1, action_col2, action_col3 = st.columns([2, 2, 1])
+                        with action_col1:
+                            if st.button("✅ Apply Changes", use_container_width=True):
+                                try:
+                                    with open(selected_file["full_path"], 'w', encoding='utf-8') as f:
+                                        f.write(refactored_code)
+                                    st.success("✨ Changes applied successfully!")
+                                except Exception as e:
+                                    st.error(f"❌ Error applying changes: {str(e)}")
+                        with action_col2:
+                            # Download button for refactored code
+                            st.download_button(
+                                "💾 Download Refactored Code",
+                                refactored_code,
+                                file_name=f"refactored_{Path(selected_file['path']).name}",
+                                mime="text/plain",
+                                use_container_width=True
+                            )
+                        with action_col3:
+                            if st.button("🔄 Regenerate", use_container_width=True):
+                                st.rerun()
                     else:
-                        st.error("Failed to generate refactoring. Please try again.")
+                        st.error("❌ Failed to generate refactoring. Please try again.")
 
         except Exception as e:
-            st.error(f"Error reading file: {str(e)}")
+            st.error(f"❌ Error processing file: {str(e)}")
             return
 
 def render_testing_tab():
