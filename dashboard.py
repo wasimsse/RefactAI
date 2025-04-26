@@ -19,6 +19,7 @@ from contextlib import contextmanager
 from smell_detector.detector import detect_smells
 from refactoring.engine import RefactoringEngine
 from refactoring.file_utils import RefactoringFileManager
+from gptlab_integration import GPTLAB_ENDPOINTS, refactor_with_gptlab
 
 # Configure root logger
 logging.basicConfig(
@@ -1474,7 +1475,7 @@ def render_detection_tab():
     # Check if we have Java files
     java_files = st.session_state.project_manager.project_metadata.get("java_files", [])
     if not java_files:
-        st.error("❌ No Java files found in the project.")
+        st.warning("⚠️ No Java files found in the project.")
         return
     
     # Initialize session state for analysis
@@ -1788,201 +1789,112 @@ def render_detection_tab():
             return
 
 def render_refactoring_tab():
-    """Render the refactoring tab with model selection and code display."""
-    st.header("Code Refactoring")
-    st.markdown("Follow these steps to refactor your Java code using AI-powered suggestions.")
-    
-    # Initialize session state for refactoring
-    if "refactoring_file" not in st.session_state:
-        st.session_state.refactoring_file = None
-    if "refactored_code" not in st.session_state:
-        st.session_state.refactored_code = None
-    if "refactoring_metadata" not in st.session_state:
-        st.session_state.refactoring_metadata = None
-    
-    # 1. Model Configuration
-    with st.expander("🤖 Model Configuration", expanded=True):
-        st.markdown("### Select and Configure Your Model")
-        
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            source = st.radio(
-                "Model Source",
-                ["Local", "Cloud"],
-                help="Choose between locally installed models or cloud-based models",
-                horizontal=True
-            )
-            
-            model_manager = st.session_state.get('model_manager')
-            available_models = {
-                name: info for name, info in model_manager.available_models.items()
-                if (info["type"] == "local" and source == "Local") or 
-                   (info["type"] == "cloud" and source == "Cloud")
-            }
-            
-            model_names = list(available_models.keys())
-            if not model_names:
-                st.warning(f"No {'local' if source == 'Local' else 'cloud'} models available")
-                return
-            
-            selected_model = st.selectbox(
-                "Select Model",
-                model_names,
-                help="Choose the model to use for refactoring"
-            )
-        
-        with col2:
-            api_key = None
-            if source == "Cloud":
-                api_key = st.text_input(
-                    "API Key",
-                    type="password",
-                    help="Enter your API key for the selected cloud model"
-                )
-            
-            if st.button("Load Model", key="load_model_button", use_container_width=True):
-                with st.spinner("Loading model..."):
-                    success = model_manager.load_model(source, selected_model, api_key)
-                    if success:
-                        st.session_state.model_loaded = True
-                        st.success(f"Model {selected_model} loaded successfully!")
-        
-        # Show model info if selected
-        if selected_model:
-            model_info = available_models[selected_model]
-            st.info(
-                f"📌 **Model Details**\n\n"
-                f"• Type: {model_info['type'].title()}\n"
-                f"• Device: {model_info.get('device', 'N/A')}\n"
-                f"• Status: {model_info.get('status', 'Unknown')}"
-            )
-    
-    if not st.session_state.get('model_loaded'):
-        st.warning("⚠️ Please load a model first to proceed with refactoring")
+    """Render the refactoring tab content."""
+    st.header("Generate Refactoring", help="Generate refactoring suggestions for your code")
+
+    # Check if project is loaded
+    if not st.session_state.project_manager.project_path:
+        st.warning("⚠️ Please upload a project first in the Project Upload tab.")
         return
-        
-    # 2. File Selection
-    with st.expander("📁 File Selection", expanded=True):
-        st.markdown("### Select Java File to Refactor")
-        
-        if not st.session_state.project_manager.project_path:
-            st.warning("⚠️ Please load a Java project first")
-            return
-        
-        java_files = st.session_state.project_manager.project_metadata.get("java_files", [])
-        if not java_files:
-            st.warning("⚠️ No Java files found in the project")
-            return
-        
-        selected_file = st.selectbox(
-            "Choose File",
-            options=[f["path"] for f in java_files],
-            help="Select the Java file you want to refactor"
+
+    # Check if we have Java files
+    java_files = st.session_state.project_manager.project_metadata.get("java_files", [])
+    if not java_files:
+        st.warning("⚠️ No Java files found in the project.")
+        return
+
+    # Hardware selection
+    endpoints = list(GPTLAB_ENDPOINTS.keys())
+    selected_endpoint = st.selectbox(
+        "Select Hardware",
+        endpoints,
+        index=endpoints.index("RANDOM") if "RANDOM" in endpoints else 0,
+        help="Choose the hardware resource to use for refactoring"
+    )
+
+    # Show endpoint details
+    if selected_endpoint:
+        endpoint_info = GPTLAB_ENDPOINTS[selected_endpoint]
+        st.info(
+            f"📌 **Selected Hardware**\n\n"
+            f"• Resource: {selected_endpoint}\n"
+            f"• Hardware: {endpoint_info['hardware']}\n"
+            f"• Description: {endpoint_info['description']}"
         )
-        
-        if selected_file:
-            file_info = next((f for f in java_files if f["path"] == selected_file), None)
-            if file_info:
-                try:
-                    with open(file_info["full_path"], 'r', encoding='utf-8') as f:
-                        file_content = f.read()
-                    st.session_state.refactoring_file = file_info
-                    st.success("✅ File loaded successfully")
-                except Exception as e:
-                    st.error(f"❌ Error reading file: {str(e)}")
-                    return
+
+    # File selection
+    selected_file = st.selectbox(
+        "Select File to Refactor",
+        options=java_files,
+        format_func=lambda x: x["path"],
+        help="Choose which Java file to refactor"
+    )
+
+    # Code smell selection
+    st.subheader("🎯 Target Smells")
+    selected_smells = []
+    smell_options = {
+        "God Class": "Large class that does too much",
+        "Feature Envy": "Method uses more features of another class",
+        "Data Class": "Class with only data and no behavior",
+        "Long Method": "Method is too long and complex",
+        "Complex Class": "Class with high cyclomatic complexity"
+    }
     
-    # 3. Code Analysis
-    with st.expander("🔍 Code Analysis", expanded=True):
-        if not st.session_state.refactoring_file:
-            st.info("Select a file above to analyze its code")
-            return
+    cols = st.columns(3)
+    for i, (smell, description) in enumerate(smell_options.items()):
+        with cols[i % 3]:
+            if st.checkbox(smell, help=description):
+                selected_smells.append(smell)
+
+    # Show file content and refactoring button
+    if selected_file:
+        try:
+            with open(selected_file["full_path"], 'r', encoding='utf-8') as f:
+                file_content = f.read()
             
-        st.markdown("### Original Code")
-        st.code(file_content, language="java")
-        
-        # Detect code smells using the rule-based approach
-        from smell_detector.detector import detect_smells, compute_metrics
-        
-        # Prepare class data for smell detection
-        class_data = {
-            "class_name": st.session_state.refactoring_file["name"],
-            "content": file_content
-        }
-        
-        # Detect smells
-        smell_results = detect_smells([class_data])
-        detected_smells = smell_results[class_data["class_name"]]["smells"]
-        
-        st.markdown("### Detected Code Smells")
-        if detected_smells:
-            for smell in detected_smells:
-                reasoning = smell_results[class_data["class_name"]]["reasoning"][smell]
-                st.warning(f"⚠️ {smell}: {reasoning}")
-        else:
-            st.success("✅ No code smells detected in this file")
-        
-        # Show metrics
-        metrics = smell_results[class_data["class_name"]]["metrics"]
-        st.markdown("### Code Metrics")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Lines of Code", metrics["loc"])
-        with col2:
-            st.metric("Weighted Method Count", metrics["wmc"])
-        with col3:
-            st.metric("Public Methods", metrics["public_methods"])
-        
-        if detected_smells:
-            if st.button("Generate Refactoring", use_container_width=True):
-                with st.spinner("🔄 Analyzing code and generating suggestions..."):
-                    try:
-                        refactored_code, metadata = model_manager.generate_refactoring(
-                            file_content, detected_smells
-                        )
-                        st.session_state.refactored_code = refactored_code
-                        st.session_state.refactoring_metadata = metadata
-                        st.success("✨ Refactoring suggestions generated!")
-                    except Exception as e:
-                        st.error(f"❌ Error during refactoring: {str(e)}")
-                        return
-    
-    # 4. Refactoring Preview
-    with st.expander("👀 Refactoring Preview", expanded=True):
-        if not st.session_state.refactored_code:
-            st.info("Generate refactoring suggestions above to preview changes")
-            return
-            
-        st.markdown("### Code Comparison")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("**Original Code**")
             st.code(file_content, language="java")
-        with col2:
-            st.markdown("**Refactored Code**")
-            st.code(st.session_state.refactored_code, language="java")
-    
-    # 5. Details and Actions
-    with st.expander("📋 Details and Actions", expanded=True):
-        if not st.session_state.refactoring_metadata:
-            st.info("Generate refactoring suggestions to view details")
+
+            if st.button("🔄 Generate Refactoring", use_container_width=True):
+                if not selected_smells:
+                    st.warning("Please select at least one code smell to address.")
+                    return
+
+                with st.spinner("Generating refactoring suggestions..."):
+                    refactored_code = refactor_with_gptlab(
+                        code=file_content,
+                        model_name="llama3.2",  # Using default Ollama model
+                        endpoint=selected_endpoint,
+                        smells=selected_smells
+                    )
+
+                    if refactored_code:
+                        st.success("✅ Refactoring generated successfully!")
+                        
+                        # Show diff
+                        st.subheader("📝 Changes")
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.markdown("**Original Code**")
+                            st.code(file_content, language="java")
+                        with col2:
+                            st.markdown("**Refactored Code**")
+                            st.code(refactored_code, language="java")
+
+                        # Apply changes button
+                        if st.button("✅ Apply Changes", use_container_width=True):
+                            try:
+                                with open(selected_file["full_path"], 'w', encoding='utf-8') as f:
+                                    f.write(refactored_code)
+                                st.success("Changes applied successfully!")
+                            except Exception as e:
+                                st.error(f"Error applying changes: {str(e)}")
+                    else:
+                        st.error("Failed to generate refactoring. Please try again.")
+
+        except Exception as e:
+            st.error(f"Error reading file: {str(e)}")
             return
-            
-        st.markdown("### Refactoring Details")
-        st.json(st.session_state.refactoring_metadata)
-        
-        st.markdown("### Apply Changes")
-        col1, col2 = st.columns([1, 2])
-        with col1:
-            if st.button("Apply Changes", use_container_width=True):
-                try:
-                    with open(st.session_state.refactoring_file["full_path"], 'w', encoding='utf-8') as f:
-                        f.write(st.session_state.refactored_code)
-                    st.success("✅ Changes applied successfully!")
-                except Exception as e:
-                    st.error(f"❌ Error applying changes: {str(e)}")
-        with col2:
-            st.info("⚠️ This will overwrite the original file. Make sure to review the changes carefully.")
 
 def render_testing_tab():
     """Render the Testing & Metrics tab content."""

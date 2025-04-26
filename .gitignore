@@ -50,6 +50,7 @@ models/
 *.pt
 *.pth
 *.onnx
+*.safetensors
 
 # Test Coverage
 .coverage
@@ -75,4 +76,10 @@ offload/
 
 # LLM Models
 *.gguf
-*.ggml 
+*.ggml
+
+# Streamlit
+.streamlit/
+
+# Test files
+test_output/ 
