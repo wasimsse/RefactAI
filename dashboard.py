@@ -25,6 +25,7 @@ from gptlab_integration import (
 )
 from refactoring.file_utils import RefactoringFileManager
 import difflib
+import html
 
 # Configure root logger
 logging.basicConfig(
@@ -833,94 +834,98 @@ def render_sidebar():
 
 def render_refactoring_sidebar():
     """Render the refactoring configuration sidebar."""
-    st.sidebar.header("⚙️ Model Configuration")
+    st.sidebar.title("⚙️ Model Configuration")
     
     # Model source selection
     model_source = st.sidebar.selectbox(
         "Model Source",
-        options=["Local", "Cloud"],
-        help="Choose where to load the model from"
+        ["Local", "Cloud"],
+        help="Select where to load the model from"
     )
     
-    # Get available models based on source
-    model_manager = st.session_state.get('model_manager')
-    if not model_manager:
-        model_manager = ModelManager()
-        st.session_state['model_manager'] = model_manager
+    # Model selection and status
+    model_manager = st.session_state.model_manager
+    available_models = model_manager.available_models
     
-    # Filter models based on source
-    available_models = {
-        name: info for name, info in model_manager.available_models.items()
-        if info["type"].lower() == model_source.lower()
-    }
-    
-    if not available_models:
-        if model_source == "Local":
-            st.sidebar.error("No local models found. Please check models directory.")
-        else:
-            st.sidebar.info("Please configure cloud model settings below.")
-    
-    # Model selection
-    selected_model = st.sidebar.selectbox(
-        "Select Model",
-        options=list(available_models.keys()),
-        help="Choose which model to use for refactoring"
-    )
-    
-    # Show model status and details
-    if selected_model and selected_model in available_models:
-        model_info = available_models[selected_model]
-        
-        # Status indicator
+    # Display model status indicators
+    st.sidebar.markdown("### 🔄 Model Status")
+    for model_name, model_info in available_models.items():
+        status = model_info.get("status", "unknown")
         status_color = {
             "available": "🟢",
             "loading": "🟡",
             "error": "🔴",
-            "offline": "⚪"
-        }.get(model_info.get("status", "unknown"), "❓")
+            "unknown": "⚪"
+        }.get(status, "⚪")
         
-        # Display model information
-        st.sidebar.markdown(f"""
-        **Model Status:** {status_color} {model_info.get('status', 'Unknown').title()}
-        **Device:** {model_info.get('device', 'N/A')}
-        """)
-        
-        # Show size and memory info for local models
-        if model_info["type"] == "local":
-            st.sidebar.markdown(f"**Size:** {model_info.get('size_gb', 0):.1f} GB")
-            
-            # Show GPU/MPS memory usage if applicable
-            if model_info["device"] in ["GPU", "MPS"]:
-                memory = model_info.get("memory_usage", {})
-                st.sidebar.markdown(f"""
-                **Memory Usage:**
-                - Allocated: {memory.get('allocated', 0):.1f} GB
-                - Reserved: {memory.get('cached', 0):.1f} GB
-                """)
-        
-        # Show provider for cloud models
-        elif model_info["type"] == "cloud":
-            st.sidebar.markdown(f"**Provider:** {model_info.get('provider', 'Unknown')}")
+        # Create a status indicator with loading progress if applicable
+        col1, col2 = st.sidebar.columns([1, 3])
+        with col1:
+            st.markdown(f"{status_color}")
+        with col2:
+            st.markdown(f"{model_name}")
+            if status == "loading":
+                st.progress(model_info.get("loading_progress", 0), "Loading model...")
+            elif status == "error":
+                st.error(model_info.get("error_message", "Unknown error"))
+    
+    # Model selection
+    selected_model = st.sidebar.selectbox(
+        "Select Model",
+        list(available_models.keys()),
+        help="Choose a model for refactoring"
+    )
+    
+    # Model configuration
+    st.sidebar.markdown("### ⚙️ Model Parameters")
+    temperature = st.sidebar.slider(
+        "Temperature",
+        min_value=0.0,
+        max_value=1.0,
+        value=0.7,
+        step=0.1,
+        help="Higher values make output more creative but less focused"
+    )
+    
+    max_tokens = st.sidebar.number_input(
+        "Max Tokens",
+        min_value=1000,
+        max_value=100000,
+        value=4096,
+        step=1000,
+        help="Maximum number of tokens in the response"
+    )
     
     # API key input for cloud models
     api_key = None
-    if model_source == "Cloud" and selected_model:
-        model_info = available_models.get(selected_model, {})
-        if model_info.get("requires_key", False):
-            api_key = st.sidebar.text_input(
-                f"{model_info.get('provider', 'API')} Key",
-                type="password",
-                help=f"Enter your {model_info.get('provider', 'API')} key"
-            )
+    if model_source == "Cloud":
+        api_key = st.sidebar.text_input(
+            "API Key",
+            type="password",
+            help="Enter your API key for cloud models"
+        )
     
-    # Load model button
+    # Load model button with error handling
     if st.sidebar.button("Load Model", help="Click to load the selected model"):
-        success = model_manager.load_model(model_source, selected_model, api_key)
-        if success:
-            st.session_state['current_model'] = selected_model
+        with st.sidebar.status("Loading model...") as status:
+            try:
+                success = model_manager.load_model(
+                    model_source,
+                    selected_model,
+                    api_key,
+                    temperature=temperature,
+                    max_tokens=max_tokens
+                )
+                if success:
+                    status.update(label="Model loaded successfully!", state="complete")
+                    st.session_state.current_model = selected_model
+                else:
+                    status.update(label="Failed to load model", state="error")
+            except Exception as e:
+                status.update(label=f"Error: {str(e)}", state="error")
     
     # Target smells selection
-    st.sidebar.header("🎯 Target Smells")
+    st.sidebar.markdown("### 🎯 Target Smells")
     selected_smells = []
     
     smell_options = {
@@ -1838,438 +1843,233 @@ def highlight_code_differences(original_code: str, refactored_code: str) -> tupl
     return ('\n'.join(highlighted_original), '\n'.join(highlighted_refactored))
 
 def render_refactoring_tab():
-    """Render the refactoring tab with model selection and code display."""
-    st.header("Code Refactoring")
-    st.markdown("Follow these steps to refactor your Java code using AI-powered suggestions.")
+    """Render the Refactoring tab content."""
+    st.title("🛠️ Code Refactoring")
     
     # Initialize session state variables
-    if "refactoring_file" not in st.session_state:
-        st.session_state.refactoring_file = None
-    if "refactored_code" not in st.session_state:
-        st.session_state.refactored_code = None
-    if "refactoring_metadata" not in st.session_state:
-        st.session_state.refactoring_metadata = None
-    if "original_code" not in st.session_state:
+    if 'project_files' not in st.session_state:
+        st.session_state.project_files = []
+    if 'selected_file' not in st.session_state:
+        st.session_state.selected_file = None
+    if 'original_code' not in st.session_state:
         st.session_state.original_code = None
-    
-    # Custom CSS for line numbers and diff highlighting
-    st.markdown("""
-    <style>
-    .java-code {
-        counter-reset: line;
-        white-space: pre;
-        border-radius: 3px;
-        font-family: monospace;
-        height: 500px;
-        overflow-y: scroll;
-        position: relative;
-        background-color: #f8f9fa;
-    }
-    .java-code .line {
-        display: block;
-        position: relative;
-        padding-left: 4em;
-        min-height: 1.5em;
-        line-height: 1.5;
-    }
-    .java-code .line:before {
-        content: counter(line);
-        counter-increment: line;
-        position: absolute;
-        left: 0;
-        width: 3em;
-        padding-right: 1em;
-        text-align: right;
-        color: #999;
-        border-right: 1px solid #ddd;
-        background-color: #f8f9fa;
-    }
-    .java-code .added {
-        background-color: #e6ffe6;
-    }
-    .java-code .removed {
-        background-color: #ffe6e6;
-    }
-    .java-code .modified {
-        background-color: #fff3e6;
-    }
-    .code-container {
-        display: flex;
-        gap: 1rem;
-        margin-bottom: 1rem;
-    }
-    .code-column {
-        flex: 1;
-        min-width: 0;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
-    st.markdown("""
-    <script>
-    // Function to synchronize scrolling between code views
-    function syncScroll(element) {
-        const containers = document.querySelectorAll('.java-code');
-        const percentage = element.scrollTop / (element.scrollHeight - element.clientHeight);
-        
-        containers.forEach(container => {
-            if (container !== element) {
-                container.scrollTop = percentage * (container.scrollHeight - container.clientHeight);
-            }
-        });
-    }
-
-    // Add scroll event listeners to code containers
-    document.addEventListener('DOMContentLoaded', function() {
-        const containers = document.querySelectorAll('.java-code');
-        containers.forEach(container => {
-            container.addEventListener('scroll', function() {
-                syncScroll(this);
-            });
-        });
-    });
-    </script>
-    """, unsafe_allow_html=True)
+    if 'refactored_code' not in st.session_state:
+        st.session_state.refactored_code = None
+    if 'refactoring_metadata' not in st.session_state:
+        st.session_state.refactoring_metadata = None
+    if 'detected_smells' not in st.session_state:
+        st.session_state.detected_smells = None
+    if 'refactoring_history' not in st.session_state:
+        st.session_state.refactoring_history = []
     
     # Check if project is loaded
-    if not hasattr(st.session_state, 'project_manager') or not st.session_state.project_manager.project_path:
-        st.warning("Please upload a Java project first in the Project Upload tab.")
+    if not st.session_state.project_manager.project_path:
+        st.warning("Please upload a project first")
         return
     
-    # Create columns for resource selection and model selection
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("Select Resource")
-        # Get active endpoints with status
-        active_endpoints = {}
-        for endpoint_name, endpoint_info in GPTLAB_ENDPOINTS.items():
-            try:
-                if endpoint_name == "LOCAL":
-                    status = check_ollama_status()
-                    if status:
-                        active_endpoints[endpoint_name] = endpoint_info
-                else:
-                    # Skip non-local endpoints for now
-                    continue
-            except Exception as e:
-                logger.warning(f"Failed to get status for endpoint {endpoint_name}: {str(e)}")
-        
-        if not active_endpoints:
-            st.error("No active endpoints found. Using local endpoint.")
-            active_endpoints = {"LOCAL": GPTLAB_ENDPOINTS["LOCAL"]}
-        
-        # Format endpoint options
-        def format_endpoint_option(endpoint_name):
-            info = active_endpoints[endpoint_name]
-            return f"{endpoint_name} ({info['hardware']})"
-        
-        selected_endpoint = st.selectbox(
-            "Resource",
-            options=list(active_endpoints.keys()),
-            format_func=format_endpoint_option
-        )
-    
-    with col2:
-        st.subheader("Select Model")
-        # Get available models
-        try:
-            available_models = get_gptlab_models()
-            if not available_models:
-                st.error("No models available. Using default model.")
-                available_models = DEFAULT_MODELS
-        except Exception as e:
-            st.error(f"Error fetching models: {str(e)}")
-            available_models = DEFAULT_MODELS
-        
-        # Filter models for selected endpoint
-        endpoint_models = {k: v for k, v in available_models.items() 
-                         if v["endpoint"] == selected_endpoint}
-        
-        if not endpoint_models:
-            st.error("No models available for selected resource. Using default model.")
-            endpoint_models = DEFAULT_MODELS
-        
-        # Format model options
-        def format_model_option(model_key):
-            model = endpoint_models[model_key]
-            return f"{model['name']} ({model['hardware']})"
-        
-        selected_model_key = st.selectbox(
-            "Model",
-            options=list(endpoint_models.keys()),
-            format_func=format_model_option
-        )
-    
-    # Display model details
-    if selected_model_key and selected_model_key in available_models:
-        model_info = available_models[selected_model_key]
-        with st.expander("Model Details", expanded=False):
-            st.json({
-                "Name": model_info["name"],
-                "Hardware": model_info["hardware"],
-                "Device": model_info["device"],
-                "Capabilities": model_info["capabilities"],
-                "Max Tokens": model_info["max_tokens"],
-                "Temperature": model_info["temperature"]
-            })
-    
-    # File selection section
-    st.subheader("Select Files to Refactor")
-    
     # Get Java files from project
-    java_files = []
-    if st.session_state.project_manager.project_path:
-        for root, _, files in os.walk(st.session_state.project_manager.project_path):
-            for file in files:
-                if file.endswith('.java'):
-                    rel_path = os.path.relpath(os.path.join(root, file), 
-                                             st.session_state.project_manager.project_path)
-                    java_files.append(rel_path)
+    java_files = [f for f in st.session_state.project_manager.project_metadata.get("java_files", []) 
+                  if f["path"].endswith(".java")]
     
     if not java_files:
-        st.warning("No Java files found in the uploaded project.")
-    else:
-        selected_file = st.selectbox(
-            "Choose a Java file to refactor",
-            options=java_files,
-            format_func=lambda x: f"📄 {x}"
-        )
-        
-        if selected_file:
-            file_path = os.path.join(st.session_state.project_manager.project_path, selected_file)
-            try:
-                with open(file_path, 'r') as f:
-                    code_content = f.read()
-                    # Store in session state for comparison
-                    st.session_state.original_code = code_content
+        st.warning("No Java files found. Please upload a project with Java files.")
+        return
+    
+    # File selection
+    file_options = [f["path"] for f in java_files]
+    selected_file = st.selectbox(
+        "Choose a file to refactor",
+        file_options,
+        key="refactoring_file_selector"
+    )
+    
+    if selected_file:
+        # Read file content
+        file_path = Path(st.session_state.project_manager.project_path) / selected_file
+        try:
+            with open(file_path, 'r') as f:
+                code_content = f.read()
+                st.session_state.original_code = code_content
                 
-                # Show code with line numbers
+            # Display original code
+            with st.expander("📄 Original Code", expanded=True):
                 st.code(code_content, language="java")
-                
-                # Refactoring options
-                st.subheader("Refactoring Options")
-                
-                # Refactoring type selection
-                refactoring_type = st.selectbox(
-                    "Select refactoring type",
-                    options=[
-                        "General Improvement",
-                        "Performance Optimization", 
-                        "Code Style",
-                        "Documentation"
-                    ],
-                    help="Choose the type of refactoring to apply"
-                )
-                
-                # Code smell detection
-                with st.expander("Detect Code Smells", expanded=False):
-                    st.write("Common code smells to look for:")
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        smells = []
-                        if st.checkbox("Long Method", help="Methods that are too long and do too much"):
-                            smells.append("Long Method")
-                        if st.checkbox("Large Class", help="Classes that have too many responsibilities"):
-                            smells.append("Large Class")
-                        if st.checkbox("Duplicate Code", help="Similar code structures repeated"):
-                            smells.append("Duplicate Code")
-                        if st.checkbox("Complex Conditionals", help="Nested or complex if-else statements"):
-                            smells.append("Complex Conditionals")
-                    
-                    with col2:
-                        if st.checkbox("Poor Naming", help="Unclear or misleading variable/method names"):
-                            smells.append("Poor Naming")
-                        if st.checkbox("Magic Numbers", help="Unexplained numeric literals"):
-                            smells.append("Magic Numbers")
-                        if st.checkbox("Comments Over Code", help="Excessive comments instead of clear code"):
-                            smells.append("Comments Over Code")
-                        if st.checkbox("Dead Code", help="Unused code or redundant operations"):
-                            smells.append("Dead Code")
-                
-                # Additional instructions
-                additional_instructions = st.text_area(
-                    "Additional instructions (optional)",
-                    help="Provide any specific requirements or constraints for the refactoring"
-                )
-                
-                # Refactoring button
-                if st.button("Refactor Code", type="primary"):
-                    with st.spinner("Refactoring code..."):
-                        try:
-                            # Extract model name from key
-                            model_name = available_models[selected_model_key]["name"]
-                            
-                            # First detect code smells
-                            try:
-                                smell_analysis = detect_smells([{
-                                    "class_name": selected_file,
-                                    "content": code_content,
-                                    "inheritance_data": {
-                                        "inherited_methods": 0,
-                                        "used_methods": 0,
-                                        "overridden_methods": 0
-                                    }
-                                }])
-                                
-                                if not smell_analysis or selected_file not in smell_analysis:
-                                    st.error("❌ Error: Smell detection failed")
-                                    return
-                                    
-                                smell_analysis = smell_analysis[selected_file]
-                                
-                            except Exception as e:
-                                st.error(f"Error during smell detection: {str(e)}")
-                                return
-                            
-                            # Then perform refactoring
-                            refactored_code = refactor_with_gptlab(
-                                code=code_content,
-                                model_name=model_name,
-                                endpoint=selected_endpoint,
-                                smell_analysis=smell_analysis,
-                                additional_instructions=additional_instructions
-                            )
-                            
-                            if refactored_code and not refactored_code.startswith("Error:"):
-                                st.code(refactored_code, language="java")
-                                st.download_button(
-                                    "Download Refactored Code",
-                                    refactored_code,
-                                    file_name=f"refactored_{selected_file}",
-                                    mime="text/plain"
-                                )
-                                
-                                # Save to session state for comparison
-                                if 'original_code' not in st.session_state:
-                                    st.session_state.original_code = code_content
-                                st.session_state.refactored_code = refactored_code
-                                
-                                # Show side-by-side comparison
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    st.subheader("Original Code")
-                                    st.code(code_content, language="java")
-                                with col2:
-                                    st.subheader("Refactored Code")
-                                    st.code(refactored_code, language="java")
-                            else:
-                                st.error(refactored_code)
-                                
-                        except Exception as e:
-                            st.error(f"Error during refactoring: {str(e)}")
-                            logger.error(f"Refactoring error: {str(e)}")
-                            
-            except Exception as e:
-                st.error(f"Error reading file: {str(e)}")
-    
-    # Manual code input option
-    with st.expander("Or enter code manually", expanded=False):
-        code_input = st.text_area("Enter your code here", height=200)
-        if st.button("Refactor Manual Code"):
-            if code_input.strip():
-                try:
-                    model_name = available_models[selected_model_key]["name"]
-                    
-                    # First detect code smells
-                    smell_analysis = detect_smells([{
-                        "class_name": selected_file,
-                        "content": code_input,
-                        "inheritance_data": {
-                            "inherited_methods": 0,
-                            "used_methods": 0,
-                            "overridden_methods": 0
-                        }
-                    }])
-                    
-                    if not smell_analysis or selected_file not in smell_analysis:
-                        st.error("❌ Error: Smell detection failed")
-                        return
-                        
-                    smell_analysis = smell_analysis[selected_file]
-                    
-                    # Then perform refactoring
-                    refactored_code = refactor_with_gptlab(
-                        code=code_input,
-                        model_name=model_name,
-                        endpoint=selected_endpoint,
-                        smell_analysis=smell_analysis,
-                        additional_instructions=additional_instructions
-                    )
-                    
-                    if refactored_code and not refactored_code.startswith("Error:"):
-                        # Save to session state for comparison
-                        if 'original_code' not in st.session_state:
-                            st.session_state.original_code = code_input
-                        st.session_state.refactored_code = refactored_code
-                        
-                        # Show side-by-side comparison
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.subheader("Original Code")
-                            st.code(code_input, language="java")
-                        with col2:
-                            st.subheader("Refactored Code")
-                            st.code(refactored_code, language="java")
-                            
-                        st.download_button(
-                            "Download Refactored Code",
-                            refactored_code,
-                            file_name="refactored_code.java",
-                            mime="text/plain"
-                        )
-                    else:
-                        st.error(refactored_code)
-                        
-                except Exception as e:
-                    st.error(f"Error during refactoring: {str(e)}")
-                    logger.error(f"Refactoring error: {str(e)}")
-            else:
-                st.warning("Please enter some code to refactor.")
-    
-    # 4. Refactoring Preview
-    with st.expander("👀 Refactoring Preview", expanded=True):
-        if not st.session_state.refactored_code:
-            st.info("Generate refactoring suggestions above to preview changes")
+        except Exception as e:
+            st.error(f"Error reading file: {str(e)}")
             return
+    
+    # Refactoring configuration
+    st.subheader("🔧 Refactoring Configuration")
+    
+    # Custom refactoring patterns
+    refactoring_patterns = {
+        "Extract Method": "Split long methods into smaller, focused ones",
+        "Extract Class": "Move related fields and methods to a new class",
+        "Rename Symbol": "Improve naming of variables, methods, or classes",
+        "Move Method": "Move method to a more appropriate class",
+        "Encapsulate Field": "Make fields private and provide accessors",
+        "Replace Conditional with Polymorphism": "Use inheritance instead of conditionals",
+        "Introduce Parameter Object": "Group parameters into an object",
+        "Extract Interface": "Create interface from common methods"
+    }
+    
+    col1, col2 = st.columns(2)
+    selected_patterns = []
+    
+    with col1:
+        st.markdown("##### Select Refactoring Patterns")
+        for pattern, description in list(refactoring_patterns.items())[:4]:
+            if st.checkbox(pattern, help=description):
+                selected_patterns.append(pattern)
+    
+    with col2:
+        st.markdown("##### Additional Patterns")
+        for pattern, description in list(refactoring_patterns.items())[4:]:
+            if st.checkbox(pattern, help=description):
+                selected_patterns.append(pattern)
+    
+    # Code smell detection
+    if st.button("🔍 Detect Code Smells"):
+        with st.spinner("Analyzing code..."):
+            # Analyze code for smells
+            detected_smells = analyze_code_smells(code_content)
+            st.session_state.detected_smells = detected_smells
             
-        st.markdown("### Code Comparison")
+            # Display detected smells
+            if detected_smells:
+                st.warning("Detected Code Smells:")
+                for smell, details in detected_smells.items():
+                    with st.expander(f"🔍 {smell}"):
+                        st.markdown(f"**Location:** {details['location']}")
+                        st.markdown(f"**Description:** {details['description']}")
+                        st.markdown(f"**Suggestion:** {details['suggestion']}")
+    
+    # Generate refactoring
+    if st.button("🔄 Generate Refactoring"):
+        if not selected_patterns and not st.session_state.detected_smells:
+            st.error("Please select refactoring patterns or detect code smells first.")
+        else:
+            with st.spinner("Generating refactoring suggestions..."):
+                # Generate refactoring suggestions
+                refactored_code, metadata = generate_refactoring(
+                    code_content,
+                    selected_patterns,
+                    st.session_state.detected_smells
+                )
+                
+                st.session_state.refactored_code = refactored_code
+                st.session_state.refactoring_metadata = metadata
+                
+                # Show preview
+                render_refactoring_preview(code_content, refactored_code)
+                
+                # Show improvement metrics
+                if metadata and "improvement_score" in metadata:
+                    score = metadata["improvement_score"]
+                    st.metric(
+                        "Code Quality Improvement",
+                        f"{score:.1f}%",
+                        delta=f"+{score:.1f}%"
+                    )
+    
+    # Apply refactoring
+    if st.session_state.refactored_code:
+        if st.button("✅ Apply Refactoring"):
+            with st.spinner("Applying refactoring changes..."):
+                # Save the changes
+                with open(file_path, 'w') as f:
+                    f.write(st.session_state.refactored_code)
+                
+                # Add to history
+                st.session_state.refactoring_history.append({
+                    "file": selected_file,
+                    "timestamp": datetime.now(),
+                    "patterns": selected_patterns,
+                    "smells": st.session_state.detected_smells,
+                    "improvement": st.session_state.refactoring_metadata.get("improvement_score", 0)
+                })
+                
+                st.success("Refactoring applied successfully!")
         
-        # Get highlighted versions of the code
-        highlighted_original, highlighted_refactored = highlight_code_differences(
-            st.session_state.original_code, st.session_state.refactored_code
-        )
+        # Undo button
+        if st.button("↩️ Undo Last Change"):
+            if st.session_state.refactoring_history:
+                last_change = st.session_state.refactoring_history.pop()
+                with open(file_path, 'w') as f:
+                    f.write(st.session_state.original_code)
+                st.success(f"Reverted changes to {last_change['file']}")
+    
+    # Show refactoring history
+    if st.session_state.refactoring_history:
+        with st.expander("📋 Refactoring History"):
+            for entry in reversed(st.session_state.refactoring_history):
+                st.markdown(f"""
+                **File:** {entry['file']}  
+                **Time:** {entry['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}  
+                **Patterns:** {', '.join(entry['patterns'])}  
+                **Improvement:** {entry['improvement']:.1f}%
+                ---
+                """)
+
+def analyze_code_smells(code: str) -> Dict:
+    """Analyze code for common code smells."""
+    smells = {}
+    
+    # Long Method detection
+    methods = re.finditer(r'(?:public|private|protected)\s+\w+\s+(\w+)\s*\([^)]*\)\s*{', code)
+    for method in methods:
+        method_name = method.group(1)
+        method_start = method.start()
+        method_end = find_closing_brace(code, method_start)
+        method_lines = code[method_start:method_end].count('\n')
         
-        st.markdown('<div class="code-container">', unsafe_allow_html=True)
-        
-        # Original code column
-        st.markdown('<div class="code-column">', unsafe_allow_html=True)
-        st.markdown("**Original Code**")
-        st.markdown('<div class="java-code" id="original-code">', unsafe_allow_html=True)
-        for i, line in enumerate(highlighted_original.split('\n'), 1):
-            css_class = 'line'
-            if '[red]' in line:
-                css_class += ' removed'
-                line = line.replace('[red]', '').replace('[/red]', '')
-            st.markdown(f'<span class="{css_class}">{line}</span>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Refactored code column
-        st.markdown('<div class="code-column">', unsafe_allow_html=True)
-        st.markdown("**Refactored Code**")
-        st.markdown('<div class="java-code" id="refactored-code">', unsafe_allow_html=True)
-        for i, line in enumerate(highlighted_refactored.split('\n'), 1):
-            css_class = 'line'
-            if '[green]' in line:
-                css_class += ' added'
-                line = line.replace('[green]', '').replace('[/green]', '')
-            st.markdown(f'<span class="{css_class}">{line}</span>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-        st.markdown('</div>', unsafe_allow_html=True)
+        if method_lines > 30:
+            smells[f"Long Method: {method_name}"] = {
+                "location": f"Method {method_name}",
+                "description": f"Method is {method_lines} lines long",
+                "suggestion": "Consider breaking down into smaller methods"
+            }
+    
+    # Complex Class detection
+    class_complexity = len(re.findall(r'\b(if|for|while|catch)\b', code))
+    if class_complexity > 20:
+        smells["Complex Class"] = {
+            "location": "Entire class",
+            "description": f"Class has {class_complexity} control flow statements",
+            "suggestion": "Consider splitting into multiple classes"
+        }
+    
+    # Duplicate Code detection
+    lines = code.split('\n')
+    for i in range(len(lines)):
+        for j in range(i + 5, len(lines)):
+            if j + 5 <= len(lines):
+                block1 = '\n'.join(lines[i:i+5])
+                block2 = '\n'.join(lines[j:j+5])
+                if block1 == block2 and not block1.isspace():
+                    smells[f"Duplicate Code at line {i+1}"] = {
+                        "location": f"Lines {i+1}-{i+5} and {j+1}-{j+5}",
+                        "description": "Found duplicate code blocks",
+                        "suggestion": "Consider extracting to a shared method"
+                    }
+    
+    return smells
+
+def find_closing_brace(code: str, start_pos: int) -> int:
+    """Find the position of the closing brace that matches the opening brace."""
+    brace_count = 0
+    pos = start_pos
+    
+    while pos < len(code):
+        if code[pos] == '{':
+            brace_count += 1
+        elif code[pos] == '}':
+            brace_count -= 1
+            if brace_count == 0:
+                return pos
+        pos += 1
+    
+    return len(code)
 
 def render_testing_tab():
     """Render the Testing & Metrics tab content."""
@@ -2317,6 +2117,99 @@ def render_testing_tab():
         "Before": [75, 82, 78, 85, 90],
         "After": [85, 89, 88, 92, 95]
     })
+
+def render_refactoring_preview(original_code: str, refactored_code: str):
+    """Render a side-by-side comparison of original and refactored code with diff highlighting."""
+    st.subheader("Code Comparison")
+    
+    # Split code into sections for collapsible display
+    original_sections = split_code_into_sections(original_code)
+    refactored_sections = split_code_into_sections(refactored_code)
+    
+    # Create columns for side-by-side display
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("### Original Code")
+        for section_name, section_code in original_sections.items():
+            with st.expander(f"📄 {section_name}", expanded=True):
+                st.code(section_code, language="java")
+    
+    with col2:
+        st.markdown("### Refactored Code")
+        for section_name, section_code in refactored_sections.items():
+            with st.expander(f"📄 {section_name}", expanded=True):
+                # Generate diff highlighting
+                diff_html = generate_diff_html(
+                    original_sections.get(section_name, ""),
+                    section_code
+                )
+                st.markdown(diff_html, unsafe_allow_html=True)
+
+def split_code_into_sections(code: str) -> Dict[str, str]:
+    """Split code into logical sections for collapsible display."""
+    sections = {}
+    current_section = []
+    current_section_name = "Main"
+    
+    for line in code.split('\n'):
+        # Detect class definition
+        if re.match(r'^\s*public\s+class\s+\w+', line):
+            if current_section:
+                sections[current_section_name] = '\n'.join(current_section)
+            current_section = [line]
+            current_section_name = re.search(r'class\s+(\w+)', line).group(1)
+            continue
+            
+        # Detect method definition
+        if re.match(r'^\s*(?:public|private|protected)\s+\w+\s+\w+\s*\(', line):
+            if current_section:
+                sections[current_section_name] = '\n'.join(current_section)
+            current_section = [line]
+            method_name = re.search(r'\s+(\w+)\s*\(', line).group(1)
+            current_section_name = f"Method: {method_name}"
+            continue
+            
+        current_section.append(line)
+    
+    # Add the last section
+    if current_section:
+        sections[current_section_name] = '\n'.join(current_section)
+    
+    return sections
+
+def generate_diff_html(original: str, refactored: str) -> str:
+    """Generate HTML with diff highlighting."""
+    differ = difflib.Differ()
+    diff = list(differ.compare(original.splitlines(), refactored.splitlines()))
+    
+    html_lines = []
+    for line in diff:
+        if line.startswith('+'):
+            html_lines.append(f'<div style="background-color: #e6ffe6">{html.escape(line[2:])}</div>')
+        elif line.startswith('-'):
+            html_lines.append(f'<div style="background-color: #ffe6e6">{html.escape(line[2:])}</div>')
+        elif line.startswith(' '):
+            html_lines.append(f'<div>{html.escape(line[2:])}</div>')
+    
+    return f'<pre style="background-color: white; padding: 10px; border-radius: 5px;">{"".join(html_lines)}</pre>'
+
+# Add this helper function near the top (after imports)
+def generate_refactoring(code, patterns, smells):
+    # Use refactor_with_gptlab to generate refactored code
+    model_name = st.session_state.model_manager.current_model["name"] if st.session_state.model_manager.current_model else "GPT-4"
+    endpoint = "LOCAL"  # Or use the correct endpoint if needed
+    additional_instructions = ", ".join(patterns) if patterns else ""
+    refactored_code = refactor_with_gptlab(
+        code=code,
+        model_name=model_name,
+        endpoint=endpoint,
+        smell_analysis=smells,
+        additional_instructions=additional_instructions
+    )
+    # For now, just return an empty metadata dict
+    metadata = {}
+    return refactored_code, metadata
 
 def main():
     """Main function to run the Streamlit dashboard."""
