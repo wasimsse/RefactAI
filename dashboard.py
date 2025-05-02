@@ -1903,7 +1903,9 @@ def render_refactoring_tab():
         min-width: 0;
     }
     </style>
+    """, unsafe_allow_html=True)
 
+    st.markdown("""
     <script>
     // Function to synchronize scrolling between code views
     function syncScroll(element) {
@@ -1927,6 +1929,7 @@ def render_refactoring_tab():
         });
     });
     </script>
+    """, unsafe_allow_html=True)
     
     # Check if project is loaded
     if not hasattr(st.session_state, 'project_manager') or not st.session_state.project_manager.project_path:
@@ -2302,9 +2305,9 @@ def render_testing_tab():
     with st.expander("🔍 Test Results", expanded=True):
         # TODO: Implement real test results display
         st.markdown("""
-        ✅ UserManagerTest: 12/12 passed
-        ✅ DataServiceTest: 8/8 passed
-        ✅ UtilsTest: 5/5 passed
+        [PASS] UserManagerTest: 12/12 passed
+        [PASS] DataServiceTest: 8/8 passed
+        [PASS] UtilsTest: 5/5 passed
         """)
     
     # Performance Comparison
