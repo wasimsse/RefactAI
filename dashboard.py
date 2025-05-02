@@ -1842,13 +1842,15 @@ def render_refactoring_tab():
     st.header("Code Refactoring")
     st.markdown("Follow these steps to refactor your Java code using AI-powered suggestions.")
     
-    # Initialize session state for refactoring
+    # Initialize session state variables
     if "refactoring_file" not in st.session_state:
         st.session_state.refactoring_file = None
     if "refactored_code" not in st.session_state:
         st.session_state.refactored_code = None
     if "refactoring_metadata" not in st.session_state:
         st.session_state.refactoring_metadata = None
+    if "original_code" not in st.session_state:
+        st.session_state.original_code = None
     
     # Custom CSS for line numbers and diff highlighting
     st.markdown("""
@@ -1997,6 +1999,8 @@ def render_refactoring_tab():
             try:
                 with open(file_path, 'r') as f:
                     code_content = f.read()
+                    # Store in session state for comparison
+                    st.session_state.original_code = code_content
                 
                 # Show code with line numbers
                 st.code(code_content, language="java")
@@ -2192,7 +2196,7 @@ def render_refactoring_tab():
         
         # Get highlighted versions of the code
         highlighted_original, highlighted_refactored = highlight_code_differences(
-            code_content, st.session_state.refactored_code
+            st.session_state.original_code, st.session_state.refactored_code
         )
         
         col1, col2 = st.columns(2)
