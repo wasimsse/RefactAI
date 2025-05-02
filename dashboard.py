@@ -1860,11 +1860,17 @@ def render_refactoring_tab():
         white-space: pre;
         border-radius: 3px;
         font-family: monospace;
+        height: 500px;
+        overflow-y: scroll;
+        position: relative;
+        background-color: #f8f9fa;
     }
     .java-code .line {
         display: block;
         position: relative;
         padding-left: 4em;
+        min-height: 1.5em;
+        line-height: 1.5;
     }
     .java-code .line:before {
         content: counter(line);
@@ -1876,6 +1882,7 @@ def render_refactoring_tab():
         text-align: right;
         color: #999;
         border-right: 1px solid #ddd;
+        background-color: #f8f9fa;
     }
     .java-code .added {
         background-color: #e6ffe6;
@@ -1886,8 +1893,40 @@ def render_refactoring_tab():
     .java-code .modified {
         background-color: #fff3e6;
     }
+    .code-container {
+        display: flex;
+        gap: 1rem;
+        margin-bottom: 1rem;
+    }
+    .code-column {
+        flex: 1;
+        min-width: 0;
+    }
     </style>
-    """, unsafe_allow_html=True)
+
+    <script>
+    // Function to synchronize scrolling between code views
+    function syncScroll(element) {
+        const containers = document.querySelectorAll('.java-code');
+        const percentage = element.scrollTop / (element.scrollHeight - element.clientHeight);
+        
+        containers.forEach(container => {
+            if (container !== element) {
+                container.scrollTop = percentage * (container.scrollHeight - container.clientHeight);
+            }
+        });
+    }
+
+    // Add scroll event listeners to code containers
+    document.addEventListener('DOMContentLoaded', function() {
+        const containers = document.querySelectorAll('.java-code');
+        containers.forEach(container => {
+            container.addEventListener('scroll', function() {
+                syncScroll(this);
+            });
+        });
+    });
+    </script>
     
     # Check if project is loaded
     if not hasattr(st.session_state, 'project_manager') or not st.session_state.project_manager.project_path:
@@ -2199,28 +2238,35 @@ def render_refactoring_tab():
             st.session_state.original_code, st.session_state.refactored_code
         )
         
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("**Original Code**")
-            st.markdown('<div class="java-code">', unsafe_allow_html=True)
-            for i, line in enumerate(highlighted_original.split('\n'), 1):
-                css_class = 'line'
-                if '[red]' in line:
-                    css_class += ' removed'
-                    line = line.replace('[red]', '').replace('[/red]', '')
-                st.markdown(f'<span class="{css_class}">{line}</span>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-            
-        with col2:
-            st.markdown("**Refactored Code**")
-            st.markdown('<div class="java-code">', unsafe_allow_html=True)
-            for i, line in enumerate(highlighted_refactored.split('\n'), 1):
-                css_class = 'line'
-                if '[green]' in line:
-                    css_class += ' added'
-                    line = line.replace('[green]', '').replace('[/green]', '')
-                st.markdown(f'<span class="{css_class}">{line}</span>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('<div class="code-container">', unsafe_allow_html=True)
+        
+        # Original code column
+        st.markdown('<div class="code-column">', unsafe_allow_html=True)
+        st.markdown("**Original Code**")
+        st.markdown('<div class="java-code" id="original-code">', unsafe_allow_html=True)
+        for i, line in enumerate(highlighted_original.split('\n'), 1):
+            css_class = 'line'
+            if '[red]' in line:
+                css_class += ' removed'
+                line = line.replace('[red]', '').replace('[/red]', '')
+            st.markdown(f'<span class="{css_class}">{line}</span>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Refactored code column
+        st.markdown('<div class="code-column">', unsafe_allow_html=True)
+        st.markdown("**Refactored Code**")
+        st.markdown('<div class="java-code" id="refactored-code">', unsafe_allow_html=True)
+        for i, line in enumerate(highlighted_refactored.split('\n'), 1):
+            css_class = 'line'
+            if '[green]' in line:
+                css_class += ' added'
+                line = line.replace('[green]', '').replace('[/green]', '')
+            st.markdown(f'<span class="{css_class}">{line}</span>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        st.markdown('</div>', unsafe_allow_html=True)
 
 def render_testing_tab():
     """Render the Testing & Metrics tab content."""

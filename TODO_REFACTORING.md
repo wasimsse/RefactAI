@@ -3,7 +3,7 @@
 ## High Priority
 1. Fix Code Comparison View
    - [x] Fix the `file_content` undefined error
-   - [ ] Ensure proper synchronization between original and refactored code views
+   - [x] Ensure proper synchronization between original and refactored code views
    - [ ] Add line-by-line diff highlighting
    - [ ] Add collapsible sections for better navigation
 
