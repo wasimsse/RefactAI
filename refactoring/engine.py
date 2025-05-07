@@ -520,8 +520,8 @@ class RefactoringEngine:
             self.logger.error(f"Error in load_model: {str(e)}", exc_info=True)
             return False, f"❌ Error in load_model: {str(e)}"
     
-    def refactor_code(self, code: str, smells: List[str]) -> Tuple[str, Dict]:
-        """Refactor code to address specified smells."""
+    def refactor_code(self, code: str, smells: List[str], model: str = None) -> Tuple[str, Dict]:
+        """Refactor code using the specified model (if provided)."""
         try:
             if not self.model or not self.tokenizer:
                 raise RuntimeError("Model not loaded")
@@ -531,7 +531,10 @@ class RefactoringEngine:
             
             # Generate refactored code
             if self.model_name.startswith("gpt") or self.model_name.startswith("claude"):
-                return self._generate_cloud_refactoring(prompt)
+                if model:
+                    return self._generate_cloud_refactoring(prompt, model)
+                else:
+                    return self._generate_cloud_refactoring(prompt)
             else:
                 return self._generate_local_refactoring(prompt)
                 
@@ -575,7 +578,7 @@ class RefactoringEngine:
             self.logger.error(f"Error in local generation: {str(e)}")
             return "", {"error": str(e), "success": False}
     
-    def _generate_cloud_refactoring(self, prompt: str) -> Tuple[str, Dict]:
+    def _generate_cloud_refactoring(self, prompt: str, model: str = None) -> Tuple[str, Dict]:
         """Generate refactored code using cloud API."""
         # Implementation depends on the cloud provider
         # This is a placeholder for the actual implementation
