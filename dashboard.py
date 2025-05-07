@@ -349,281 +349,188 @@ class ProjectManager:
                     self.project_metadata["total_size"] += file_size
 
 class ModelManager:
-    """Manages LLM model loading and inference with hardware optimization."""
     def __init__(self):
-        self.current_model = None
-        self.model_loaded = False
-        self.hardware_info = self._detect_hardware()
-        
-        # Initialize logger
+        """Initialize the ModelManager."""
         self.logger = logging.getLogger(__name__)
-        self.logger.setLevel(logging.INFO)
-        if not self.logger.handlers:
-            handler = logging.StreamHandler()
-            handler.setFormatter(logging.Formatter(
-                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-            ))
-            self.logger.addHandler(handler)
-        
-        self.logger.info("Initializing ModelManager...")
-        self.logger.info(f"Hardware info: {self.hardware_info}")
-        
+        self.model_loaded = False
+        self.current_model = None
         self.available_models = self._discover_models()
-        self.resource_monitor = ResourceMonitor()
-    
-    def _detect_hardware(self) -> Dict[str, Any]:
-        """Detect available hardware capabilities."""
-        import platform
-        import torch
-        import psutil
+        self.logger.info(f"Initialized ModelManager with {len(self.available_models)} models")
+
+    def _discover_models(self) -> Dict[str, Any]:
+        """Discover available models from all sources."""
+        all_models = {}
         
-        info = {
-            "platform": platform.platform(),
-            "processor": platform.processor(),
-            "architecture": platform.machine(),
-            "total_memory": psutil.virtual_memory().total / (1024**3),  # GB
-            "available_memory": psutil.virtual_memory().available / (1024**3),  # GB
-            "cpu_count": psutil.cpu_count(),
-            "has_cuda": torch.cuda.is_available(),
-            "has_mps": hasattr(torch.backends, "mps") and torch.backends.mps.is_available(),
-            "recommended_device": "cpu"
-        }
-        
-        # Set device priority
-        if info["has_cuda"]:
-            info["recommended_device"] = "cuda"
-        elif info["has_mps"]:
-            info["recommended_device"] = "mps"
-        
-        return info
-    
-    def _get_memory_config(self) -> Dict[str, Any]:
-        """Get optimal memory configuration based on available resources."""
-        available_gb = self.hardware_info["available_memory"]
-        device = self.hardware_info["recommended_device"]
-        
-        self.logger.info(f"Configuring memory for device: {device}")
-        self.logger.info(f"Available memory: {available_gb:.2f} GB")
-        
-        # Base configuration
-        config = {
-            "device": device,
-            "load_in_8bit": False,  # Default to False for better compatibility
-            "torch_dtype": torch.float32,  # Default to float32 for better compatibility
-            "device_map": None,  # Start with None for manual device management
-            "low_cpu_mem_usage": True
-        }
-        
-        # Device-specific configurations
-        if device == "cuda":
-            self.logger.info("Applying CUDA-specific configuration")
-            config.update({
-                "load_in_8bit": True,
-                "torch_dtype": torch.float16,
-                "device_map": "auto",
-                "max_memory": {
-                    "cuda:0": f"{int(available_gb * 0.7)}GB",
-                    "cpu": f"{int(available_gb * 0.2)}GB"
-                }
-            })
-        elif device == "mps":
-            self.logger.info("Applying MPS-specific configuration")
-            # For MPS, we'll use CPU memory and handle device transfer manually
-            config.update({
-                "torch_dtype": torch.float32,  # MPS requires float32
-                "device_map": None,  # Manual device management
-                "load_in_8bit": False,  # Disable 8-bit quantization for MPS
-                "low_cpu_mem_usage": True,
-                "max_memory": {
-                    "cpu": f"{int(available_gb * 0.5)}GB"  # Use CPU memory for MPS
-                }
-            })
-            # Set environment variables for MPS
-            os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
-            os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.7"
-        else:  # CPU
-            self.logger.info("Applying CPU-specific configuration")
-            config.update({
-                "device_map": None,
-                "max_memory": {
-                    "cpu": f"{int(available_gb * 0.8)}GB"
-                }
-            })
-        
-        self.logger.info(f"Final memory configuration: {config}")
-        return config
-    
-    def load_model(self, source: str, model_name: str, api_key: Optional[str] = None) -> bool:
-        """Load a model for code refactoring."""
         try:
-            # Normalize source to lowercase
+            # Get GPT-Lab models
+            gptlab_models = get_gptlab_models()
+            if gptlab_models:
+                all_models.update(gptlab_models)
+                self.logger.info(f"Found {len(gptlab_models)} GPT-Lab models")
+            
+            # Get local Ollama models
+            try:
+                response = requests.get("http://localhost:11434/api/tags")
+                if response.status_code == 200:
+                    models = response.json().get("models", [])
+                    for model in models:
+                        model_name = model.get("name", "").split(":")[0]  # Remove version tag
+                        if model_name:
+                            model_key = f"{model_name}@LOCAL"
+                            all_models[model_key] = {
+                                "name": model_name,
+                                "endpoint": "LOCAL",
+                                "hardware": "Local CPU/GPU",
+                                "type": "local",
+                                "provider": "Ollama",
+                                "status": "available",
+                                "device": "Local machine",
+                                "max_tokens": 4096,
+                                "temperature": 0.3,
+                                "description": "Local Ollama model",
+                                "capabilities": ["code_refactoring", "code_analysis"],
+                                "version": model.get("details", {}).get("parameter_size", "unknown"),
+                                "load": "N/A",
+                                "queue_length": 0
+                            }
+                    self.logger.info(f"Found {len(models)} local Ollama models")
+            except Exception as e:
+                self.logger.error(f"Error fetching local models: {e}")
+            
+            # Add private cloud models
+            private_cloud_models = {
+                "gpt-4@OPENAI": {
+                    "name": "gpt-4",
+                    "endpoint": "OPENAI",
+                    "hardware": "Cloud",
+                    "type": "cloud",
+                    "provider": "OpenAI",
+                    "status": "available",
+                    "device": "OpenAI Cloud",
+                    "max_tokens": 8192,
+                    "temperature": 0.3,
+                    "description": "GPT-4 model from OpenAI",
+                    "capabilities": ["code_refactoring", "code_analysis"],
+                    "version": "latest",
+                    "load": "N/A",
+                    "queue_length": 0
+                },
+                "claude-2@ANTHROPIC": {
+                    "name": "claude-2",
+                    "endpoint": "ANTHROPIC",
+                    "hardware": "Cloud",
+                    "type": "cloud",
+                    "provider": "Anthropic",
+                    "status": "available",
+                    "device": "Anthropic Cloud",
+                    "max_tokens": 100000,
+                    "temperature": 0.3,
+                    "description": "Claude 2 model from Anthropic",
+                    "capabilities": ["code_refactoring", "code_analysis"],
+                    "version": "latest",
+                    "load": "N/A",
+                    "queue_length": 0
+                }
+            }
+            all_models.update(private_cloud_models)
+            
+        except Exception as e:
+            self.logger.error(f"Error discovering models: {e}")
+            return {}
+            
+        return all_models
+
+    def load_model(self, model_name: str, source: str = "LOCAL", api_key: Optional[str] = None) -> bool:
+        """Load a model from the specified source."""
+        try:
             source = source.lower()
-            
-            # Log the loading attempt
             self.logger.info(f"Attempting to load model {model_name} from {source}")
-            self.logger.info(f"Hardware info: {self.hardware_info}")
             
-            # Validate model availability
-            if model_name not in self.available_models:
-                error_msg = f"Model {model_name} not found in available models"
-                self.logger.error(error_msg)
-                st.error(error_msg)
+            # Check if model exists
+            model_key = f"{model_name}@{source.upper()}"
+            if model_key not in self.available_models:
+                self.logger.error(f"Model {model_name} not found in {source}")
                 return False
-            
-            model_info = self.available_models[model_name]
-            self.logger.info(f"Model info: {model_info}")
-            
-            # Get memory configuration
-            config = self._get_memory_config()
-            self.logger.info(f"Memory config: {config}")
-            
-            device = config.pop("device")
-            
-            # Initialize model loading with progress
-            with st.spinner(f"Loading model {model_name} on {device.upper()}..."):
-                # Log pre-loading state
-                self.logger.info("Pre-loading model state:")
-                self.logger.info(f"- Current device: {device}")
-                self.logger.info(f"- Available memory: {psutil.virtual_memory().available / (1024**3):.2f} GB")
                 
-                try:
-                    # Set the current model
-                    self.current_model = {
-                        "name": model_name,
-                        "source": source,
-                        "status": "active",
-                        "device": device,
-                        "config": config
-                    }
-                    self.model_loaded = True
-                    
-                    success_msg = f"✅ Model {model_name} loaded successfully on {device.upper()}"
-                    self.logger.info(success_msg)
-                    st.success(success_msg)
-                    return True
-                    
-                except Exception as e:
-                    error_msg = f"Error during model loading: {str(e)}"
-                    self.logger.error(error_msg, exc_info=True)
-                    st.error(error_msg)
-                    if hasattr(e, 'args'):
-                        st.error(f"Additional error details: {e.args}")
-                    self.model_loaded = False
-                    self.current_model = None
+            model_info = self.available_models[model_key]
+            
+            if source == "gpt-lab":
+                if not api_key:
+                    self.logger.error("API key required for GPT-Lab models")
                     return False
+                os.environ["GPTLAB_API_KEY"] = api_key
+                
+                # Check endpoint status
+                endpoint = model_info["endpoint"]
+                if not check_ollama_status(endpoint):
+                    self.logger.error(f"Endpoint {endpoint} is not available")
+                    return False
+                    
+                self.current_model = {
+                    "name": model_name,
+                    "source": source,
+                    "endpoint": endpoint,
+                    "status": "loaded"
+                }
+                self.model_loaded = True
+                return True
+                
+            elif source == "local":
+                # Check if Ollama is running
+                if not check_ollama_status("LOCAL"):
+                    self.logger.error("Ollama service is not running")
+                    return False
+                    
+                # Check if model exists locally
+                response = requests.get("http://localhost:11434/api/tags")
+                if response.status_code != 200:
+                    self.logger.error("Failed to get local models")
+                    return False
+                    
+                local_models = [m["name"].split(":")[0] for m in response.json().get("models", [])]
+                if model_name not in local_models:
+                    self.logger.error(f"Model {model_name} not found locally")
+                    return False
+                    
+                self.current_model = {
+                    "name": model_name,
+                    "source": source,
+                    "endpoint": "LOCAL",
+                    "status": "loaded"
+                }
+                self.model_loaded = True
+                return True
+                
+            elif source == "private cloud":
+                if not api_key:
+                    self.logger.error("API key required for private cloud models")
+                    return False
+                    
+                # Set API key based on provider
+                if model_name == "gpt-4":
+                    os.environ["OPENAI_API_KEY"] = api_key
+                elif model_name == "claude-2":
+                    os.environ["ANTHROPIC_API_KEY"] = api_key
+                    
+                self.current_model = {
+                    "name": model_name,
+                    "source": source,
+                    "provider": model_info["provider"],
+                    "status": "loaded"
+                }
+                self.model_loaded = True
+                return True
+                
+            else:
+                self.logger.error(f"Unsupported source: {source}")
+                return False
                 
         except Exception as e:
-            error_msg = f"Error loading model: {str(e)}"
-            self.logger.error(error_msg, exc_info=True)
-            st.error(error_msg)
+            self.logger.error(f"Error loading model: {e}")
             self.model_loaded = False
             self.current_model = None
             return False
-    
-    def _discover_models(self) -> Dict[str, Dict]:
-        """Discover available models with hardware-specific configurations."""
-        self.logger.info("Starting model discovery")
-        models = {}
-        
-        # Check for local models
-        models_dir = Path("models")
-        if models_dir.exists():
-            for model_dir in models_dir.iterdir():
-                if not model_dir.is_dir():
-                    continue
-                    
-                config_file = model_dir / "config.yaml"
-                if not config_file.exists():
-                    self.logger.warning(f"No config file found in {model_dir}")
-                    continue
-                
-                try:
-                    with open(config_file) as f:
-                        config = yaml.safe_load(f)
-                    
-                    self.logger.info(f"Found config file in {model_dir}: {config}")
-                    
-                    # Get model name from directory
-                    model_name = model_dir.name.replace("-", " ").title()
-                    
-                    # Verify required model files
-                    required_files = config.get("model_files", [])
-                    model_files = []
-                    missing_files = []
-                    
-                    for file in required_files:
-                        file_path = model_dir / file
-                        if not file_path.exists():
-                            missing_files.append(file)
-                        else:
-                            model_files.append(file_path)
-                    
-                    if missing_files:
-                        self.logger.warning(f"Missing model files in {model_dir}: {missing_files}")
-                        continue
-                    
-                    # Check file formats
-                    has_bin = any(f.suffix == ".bin" for f in model_files)
-                    has_safetensors = any(f.suffix == ".safetensors" for f in model_files)
-                    
-                    if not (has_bin or has_safetensors):
-                        self.logger.warning(f"No valid model files found in {model_dir}")
-                        continue
-                    
-                    # Get device and memory configuration
-                    device = self.hardware_info["recommended_device"]
-                    memory_config = self._get_memory_config()
-                    
-                    # Add model to available models
-                    models[model_name] = {
-                        "name": model_name,
-                        "path": str(model_dir),
-                        "type": "local",
-                        "status": "available",
-                        "device": device,
-                        "model_format": "safetensors" if has_safetensors else "bin",
-                        "size_gb": sum(f.stat().st_size / (1024**3) for f in model_files),
-                        "files": [str(f) for f in model_files],
-                        "config": config,
-                        "memory_config": memory_config
-                    }
-                    
-                    self.logger.info(
-                        f"Found {model_name} model:\n"
-                        f"- Device: {device}\n"
-                        f"- Format: {models[model_name]['model_format']}\n"
-                        f"- Files: {len(model_files)}\n"
-                        f"- Total size: {models[model_name]['size_gb']:.1f} GB"
-                    )
-                    
-                except Exception as e:
-                    self.logger.error(f"Error processing model in {model_dir}: {str(e)}")
-                    continue
-        
-        # Add cloud models
-        cloud_models = {
-            "GPT-4": {
-                "name": "GPT-4",
-                "type": "cloud",
-                "status": "available",
-                "provider": "openai",
-                "max_tokens": 8192,
-                "temperature": 0.7
-            },
-            "Claude-2": {
-                "name": "Claude-2",
-                "type": "cloud",
-                "status": "available",
-                "provider": "anthropic",
-                "max_tokens": 100000,
-                "temperature": 0.7
-            }
-        }
-        models.update(cloud_models)
-        
-        self.logger.info(f"Model discovery complete. Found {len(models)} models.")
-        return models
-    
+
     def get_model_status(self, model_name: str) -> Dict:
         """Get current status of a model."""
         if model_name in self.available_models:
@@ -633,12 +540,19 @@ class ModelManager:
     def generate_refactoring(self, code: str, smells: List[str]) -> Tuple[str, Dict]:
         """Generate refactored code using the loaded model with resource monitoring."""
         if not self.model_loaded:
-            raise RuntimeError("No model loaded. Please load a model first.")
+            error_msg = "No model loaded. Please load a model first."
+            self.logger.error(error_msg)
+            raise RuntimeError(error_msg)
         
         try:
             # Check resources before generation
             if not self.resource_monitor.check_resources():
-                raise RuntimeError("Insufficient resources for code generation")
+                error_msg = "Insufficient resources for code generation"
+                self.logger.error(error_msg)
+                raise RuntimeError(error_msg)
+            
+            self.logger.info(f"Starting code refactoring with model {self.current_model['name']}")
+            self.logger.info(f"Code smells to address: {smells}")
             
             # Generate with resource monitoring
             with self.resource_monitor.monitor_generation():
@@ -646,10 +560,13 @@ class ModelManager:
             
             # Add resource usage to metadata
             metadata["resource_usage"] = self.resource_monitor.get_generation_stats()
+            self.logger.info("Code refactoring completed successfully")
             return refactored_code, metadata
             
         except Exception as e:
-            st.error(f"Error during refactoring: {str(e)}")
+            error_msg = f"Error during refactoring: {str(e)}"
+            self.logger.error(error_msg)
+            st.error(error_msg)
             return code, {"error": str(e), "success": False}
 
     def unload_model(self) -> bool:
@@ -666,14 +583,14 @@ class ModelManager:
             self.model_loaded = False
             self.current_model = None
             
-            success_msg = f"✅ Model {model_info['name']} unloaded successfully"
+            success_msg = f"Model {model_info['name']} unloaded successfully"
             self.logger.info(success_msg)
             st.success(success_msg)
             return True
             
         except Exception as e:
             error_msg = f"Error unloading model: {str(e)}"
-            self.logger.error(error_msg, exc_info=True)
+            self.logger.error(error_msg)
             st.error(error_msg)
             return False
 
@@ -846,90 +763,152 @@ def render_refactoring_sidebar():
     # Model source selection
     model_source = st.sidebar.selectbox(
         "Model Source",
-        ["Local", "Cloud"],
+        ["Local", "GPT-Lab", "Private Cloud"],
         help="Select where to load the model from"
     )
     
-    # Model selection and status
+    # Model selection and configuration
     model_manager = st.session_state.model_manager
     available_models = model_manager.available_models
     
-    # Display model status indicators
-    st.sidebar.markdown("### 🔄 Model Status")
-    for model_name, model_info in available_models.items():
-        status = model_info.get("status", "unknown")
-        status_color = {
-            "available": "🟢",
-            "loading": "🟡",
-            "error": "🔴",
-            "unknown": "⚪"
-        }.get(status, "⚪")
+    # Display endpoints status
+    if model_source == "GPT-Lab":
+        st.sidebar.markdown("### 🌐 GPT-Lab Endpoints")
         
-        # Create a status indicator with loading progress if applicable
-        col1, col2 = st.sidebar.columns([1, 3])
-        with col1:
-            st.markdown(f"{status_color}")
-        with col2:
-            st.markdown(f"{model_name}")
-            if status == "loading":
-                st.progress(model_info.get("loading_progress", 0), "Loading model...")
-            elif status == "error":
-                st.error(model_info.get("error_message", "Unknown error"))
-    
-    # Model selection
-    selected_model = st.sidebar.selectbox(
-        "Select Model",
-        list(available_models.keys()),
-        help="Choose a model for refactoring"
-    )
-    
-    # Model configuration
-    st.sidebar.markdown("### ⚙️ Model Parameters")
-    temperature = st.sidebar.slider(
-        "Temperature",
-        min_value=0.0,
-        max_value=1.0,
-        value=0.7,
-        step=0.1,
-        help="Higher values make output more creative but less focused"
-    )
-    
-    max_tokens = st.sidebar.number_input(
-        "Max Tokens",
-        min_value=1000,
-        max_value=100000,
-        value=4096,
-        step=1000,
-        help="Maximum number of tokens in the response"
-    )
-    
-    # API key input for cloud models
-    api_key = None
-    if model_source == "Cloud":
+        # Check endpoint status
+        for endpoint_name, endpoint_info in GPTLAB_ENDPOINTS.items():
+            if endpoint_name == "LOCAL":  # Skip local endpoint in GPT-Lab section
+                continue
+                
+            # Check endpoint status
+            is_active = check_ollama_status(endpoint_name)
+            status = "active" if is_active else "offline"
+            status_color = "🟢" if is_active else "🔴"
+            
+            # Create an endpoint status indicator
+            col1, col2, col3 = st.sidebar.columns([1, 2, 1])
+            with col1:
+                st.markdown(f"{status_color}")
+            with col2:
+                st.markdown(f"{endpoint_name}")
+            with col3:
+                st.markdown(f"{endpoint_info['hardware']}")
+        
+        # API key input
         api_key = st.sidebar.text_input(
-            "API Key",
+            "GPT-Lab API Key",
             type="password",
-            help="Enter your API key for cloud models"
+            help="Enter your GPT-Lab API key",
+            key="gptlab_api_key"
         )
+        
+        # Model selection
+        available_gptlab_models = [
+            name for name, info in available_models.items() 
+            if info.get("type") == "cloud" and info.get("provider") == "GPTlab"
+        ]
+        if available_gptlab_models:
+            selected_model = st.sidebar.selectbox(
+                "Select Model",
+                available_gptlab_models,
+                help="Choose a GPT-Lab model"
+            )
+            
+            # Show model info
+            if selected_model:
+                model_info = available_models[selected_model]
+                st.sidebar.markdown("#### Model Information")
+                st.sidebar.markdown(f"- **Endpoint:** {model_info.get('endpoint', 'Unknown')}")
+                st.sidebar.markdown(f"- **Hardware:** {model_info.get('hardware', 'Unknown')}")
+                st.sidebar.markdown(f"- **Max Tokens:** {model_info.get('max_tokens', 'Unknown')}")
+        else:
+            st.sidebar.warning("No GPT-Lab models available. Please check your API key and endpoint status.")
+            selected_model = None
+            
+    elif model_source == "Local":
+        st.sidebar.markdown("### 💻 Local Models")
+        
+        # Check Ollama status
+        ollama_status = check_ollama_status("LOCAL")
+        if not ollama_status:
+            st.sidebar.error("❌ Ollama service is not running. Please start Ollama first.")
+        else:
+            st.sidebar.success("✅ Ollama service is running")
+        
+        available_local_models = [
+            name for name, info in available_models.items() 
+            if info.get("type") == "local"
+        ]
+        if available_local_models:
+            selected_model = st.sidebar.selectbox(
+                "Select Model",
+                available_local_models,
+                help="Choose a local model"
+            )
+            
+            # Show model info
+            if selected_model:
+                model_info = available_models[selected_model]
+                st.sidebar.markdown("#### Model Information")
+                st.sidebar.markdown(f"- **Provider:** {model_info.get('provider', 'Unknown')}")
+                st.sidebar.markdown(f"- **Device:** {model_info.get('device', 'Local')}")
+        else:
+            st.sidebar.warning("No local models found. Please check Ollama installation.")
+            selected_model = None
+            
+    else:  # Private Cloud
+        st.sidebar.markdown("### ☁️ Private Cloud Models")
+        available_cloud_models = [
+            name for name, info in available_models.items() 
+            if info.get("type") == "cloud" and info.get("provider") != "GPTlab"
+        ]
+        if available_cloud_models:
+            selected_model = st.sidebar.selectbox(
+                "Select Model",
+                available_cloud_models,
+                help="Choose a cloud model"
+            )
+            
+            # Show model info
+            if selected_model:
+                model_info = available_models[selected_model]
+                st.sidebar.markdown("#### Model Information")
+                st.sidebar.markdown(f"- **Provider:** {model_info.get('provider', 'Unknown')}")
+                st.sidebar.markdown(f"- **Max Tokens:** {model_info.get('max_tokens', 'Unknown')}")
+                st.sidebar.markdown(f"- **Temperature:** {model_info.get('temperature', 0.7)}")
+        else:
+            st.sidebar.warning("No cloud models available.")
+            selected_model = None
     
-    # Load model button with error handling
-    if st.sidebar.button("Load Model", help="Click to load the selected model"):
-        with st.sidebar.status("Loading model...") as status:
-            try:
-                success = model_manager.load_model(
-                    model_source,
-                    selected_model,
-                    api_key,
-                    temperature=temperature,
-                    max_tokens=max_tokens
-                )
-                if success:
-                    status.update(label="Model loaded successfully!", state="complete")
-                    st.session_state.current_model = selected_model
-                else:
-                    status.update(label="Failed to load model", state="error")
-            except Exception as e:
-                status.update(label=f"Error: {str(e)}", state="error")
+    # Model parameters
+    if selected_model:
+        st.sidebar.markdown("### ⚙️ Model Parameters")
+        temperature = st.sidebar.slider(
+            "Temperature",
+            min_value=0.0,
+            max_value=1.0,
+            value=0.3,
+            step=0.1,
+            help="Higher values make output more creative but less focused"
+        )
+        
+        # Load model button
+        if st.sidebar.button("Load Model", help="Click to load the selected model"):
+            with st.sidebar.status("Loading model...") as status:
+                try:
+                    api_key = st.session_state.get("gptlab_api_key") if model_source == "GPT-Lab" else None
+                    success = model_manager.load_model(
+                        source=model_source,
+                        model_name=selected_model,
+                        api_key=api_key
+                    )
+                    if success:
+                        status.update(label="✅ Model loaded successfully!", state="complete")
+                        st.session_state.current_model = selected_model
+                    else:
+                        status.update(label="❌ Failed to load model", state="error")
+                except Exception as e:
+                    status.update(label=f"❌ Error: {str(e)}", state="error")
     
     # Target smells selection
     st.sidebar.markdown("### 🎯 Target Smells")
@@ -2338,22 +2317,24 @@ def main():
     if "current_tab" not in st.session_state:
         st.session_state.current_tab = "🏠 Home"
     
-    # Render sidebar and get configuration
-    selected_smells, refactoring_mode = render_sidebar()
-    
     # Create main tabs
     tabs = st.tabs([
         "🏠 Home",
         "📂 Project Upload",
         "🔍 Smell Detection",
         "🛠️ Refactoring",
-        "🧪 Testing & Metrics"
+        "🧪 Testing & Metrics",
+        "🔌 GPT-Lab Test"  # New tab
     ])
     
     # Update current tab
-    for i, tab in enumerate(["🏠 Home", "📂 Project Upload", "🔍 Smell Detection", "🛠️ Refactoring", "🧪 Testing & Metrics"]):
+    for i, tab in enumerate(["🏠 Home", "📂 Project Upload", "🔍 Smell Detection", "🛠️ Refactoring", "🧪 Testing & Metrics", "🔌 GPT-Lab Test"]):
         if tabs[i].selected:
             st.session_state.current_tab = tab
+    
+    # Only render the main sidebar for non-GPT-Lab Test tabs
+    if st.session_state.current_tab != "🔌 GPT-Lab Test":
+        selected_smells, refactoring_mode = render_sidebar()
     
     # Render tab contents
     with tabs[0]:
@@ -2366,6 +2347,9 @@ def main():
         render_refactoring_tab()
     with tabs[4]:
         render_testing_tab()
+    with tabs[5]:
+        from gptlab_test import render_test_page
+        render_test_page()
 
 if __name__ == "__main__":
     main() 

@@ -16,36 +16,39 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # GPTlab Configuration
-GPTLAB_API_KEY = os.getenv("API_KEY_TOKEN", "sk-ollama-gptlab-6cc87c9bd38b24aca0fe77f0c9c4d68d")
+GPTLAB_API_KEY = os.getenv("GPTLAB_API_KEY")  # Changed from API_KEY_TOKEN
+if not GPTLAB_API_KEY:
+    logger.warning("No GPT-Lab API key found in environment variables. Some features may be limited.")
+    GPTLAB_API_KEY = "sk-ollama-default"  # Default key for local testing
 
 # Available GPTlab endpoints
 GPTLAB_ENDPOINTS = {
     "GPU-farmi-001": {
-        "url": "https://gptlab.rd.tuni.fi/GPT-Lab/resources/GPU-farmi-001/",
+        "url": "http://86.50.169.115:11434",  # Updated Ollama endpoint URL
         "hardware": "1xP40 + 1xL4",
         "description": "Primary GPU resource with P40 and L4",
         "status": "active"
     },
     "GPU-farmi-002": {
-        "url": "https://gptlab.rd.tuni.fi/GPT-Lab/resources/GPU-farmi-002/",
+        "url": "http://86.50.169.115:11434",  # Updated Ollama endpoint URL
         "hardware": "1xP40",
         "description": "Secondary GPU resource with P40",
         "status": "active"
     },
-    "CSC": {
-        "url": "https://gptlab.rd.tuni.fi/GPT-Lab/resources/CSC-P100/",
+    "CSC-P100": {
+        "url": "http://86.50.169.115:11434",  # Updated Ollama endpoint URL
         "hardware": "1xP100",
         "description": "CSC resource with P100",
         "status": "active"
     },
     "RANDOM": {
-        "url": "https://gptlab.rd.tuni.fi/GPT-Lab/resources/RANDOM/",
+        "url": "http://86.50.169.115:11434",  # Updated Ollama endpoint URL
         "hardware": "Various",
         "description": "Random selection of available resources",
         "status": "active"
     },
     "LOCAL": {
-        "url": "http://localhost:11434/v1",
+        "url": "http://86.50.169.115:11434",  # Updated Ollama endpoint URL
         "hardware": "Local CPU/GPU",
         "description": "Local Ollama instance",
         "status": "active"
@@ -87,81 +90,59 @@ def get_gptlab_client(endpoint: str = "LOCAL") -> OpenAI:
         logger.warning(f"Endpoint {endpoint} not found, using LOCAL")
         endpoint_info = GPTLAB_ENDPOINTS["LOCAL"]
         
-    return OpenAI(
-        api_key=GPTLAB_API_KEY,
-        base_url=endpoint_info["url"]
-    )
+    try:
+        return OpenAI(
+            api_key=GPTLAB_API_KEY,
+            base_url=endpoint_info["url"]
+        )
+    except Exception as e:
+        logger.error(f"Error creating OpenAI client for endpoint {endpoint}: {str(e)}")
+        raise
 
 def get_gptlab_models() -> Dict:
-    """
-    Return available GPTlab models from all endpoints.
-    """
+    """Return available GPTlab models from all endpoints."""
     all_models = {}
     
-    # Check each endpoint
-    for endpoint_name, endpoint_info in GPTLAB_ENDPOINTS.items():
+    try:
+        # Get models from Ollama endpoint
         try:
-            client = get_gptlab_client(endpoint_name)
-            
-            # Get models from this endpoint
-            try:
-                models = client.models.list()
-                
-                # Add models with endpoint information
-                for model in models.data:  # Use .data for Ollama response
-                    model_id = getattr(model, 'id', None)
-                    if not model_id:
+            response = requests.get("http://86.50.169.115:11434/api/tags")
+            if response.status_code == 200:
+                models = response.json().get("models", [])
+                for model in models:
+                    model_name = model.get("name", "").split(":")[0]  # Remove version tag
+                    if not model_name:
                         continue
                         
-                    model_key = f"{model_id}@{endpoint_name}"
-                    
-                    # For Ollama models, use default values
-                    if endpoint_name == "LOCAL":
+                    # Add model to each endpoint for availability
+                    for endpoint_name, endpoint_info in GPTLAB_ENDPOINTS.items():
+                        model_key = f"{model_name}@{endpoint_name}"
                         all_models[model_key] = {
-                            "name": model_id,
-                            "endpoint": endpoint_name,
-                            "hardware": endpoint_info["hardware"],
-                            "type": "local",
-                            "provider": "Ollama",
-                            "status": "available",
-                            "device": endpoint_info["description"],
-                            "max_tokens": 4096,  # Default for Ollama
-                            "temperature": 0.3,
-                            "description": f"Local Ollama model",
-                            "capabilities": ["code_refactoring", "code_analysis"],
-                            "version": "latest",
-                            "load": "N/A",
-                            "queue_length": 0
-                        }
-                    else:
-                        # For GPT-Lab models
-                        all_models[model_key] = {
-                            "name": model_id,
+                            "name": model_name,
                             "endpoint": endpoint_name,
                             "hardware": endpoint_info["hardware"],
                             "type": "cloud",
-                            "provider": "GPTlab",
+                            "provider": "Ollama",
                             "status": "available",
                             "device": endpoint_info["description"],
-                            "max_tokens": getattr(model, 'max_tokens', 4096),
+                            "max_tokens": 4096,
                             "temperature": 0.3,
-                            "description": f"GPTlab model on {endpoint_info['hardware']}",
+                            "description": f"Ollama model on {endpoint_info['hardware']}",
                             "capabilities": ["code_refactoring", "code_analysis"],
-                            "version": "latest",
+                            "version": model.get("details", {}).get("parameter_size", "unknown"),
                             "load": "N/A",
                             "queue_length": 0
                         }
-                
-                logger.info(f"Found {len(models.data)} models on endpoint {endpoint_name}")
-                
-            except Exception as e:
-                logger.error(f"Error fetching models from endpoint {endpoint_name}: {str(e)}")
-                continue
-                
+                logger.info(f"Found {len(models)} models from Ollama endpoint")
+            else:
+                logger.error(f"Error fetching models from Ollama endpoint: HTTP {response.status_code}")
         except Exception as e:
-            logger.error(f"Error connecting to endpoint {endpoint_name}: {str(e)}")
-            continue
-    
+            logger.error(f"Error connecting to Ollama endpoint: {str(e)}")
+            
+    except Exception as e:
+        logger.error(f"Error discovering models: {e}")
+        return {}
+        
     # If no models found, return default models
     if not all_models:
         logger.warning("No models found from endpoints, using defaults")
@@ -219,25 +200,19 @@ def refactor_with_gptlab(
     additional_instructions: str = ""
 ) -> str:
     """
-    Refactor code using GPT-Lab API based on detected code smells.
+    Refactor code using Ollama API based on detected code smells.
     """
     try:
-        # Get GPT-Lab client
-        client = get_gptlab_client(endpoint)
-        
-        # Normalize model name
-        model = normalize_model_name(model_name)
-        
-        # Extract smell information
-        detected_smells = smell_analysis.get("smells", [])
-        metrics = smell_analysis.get("metrics", {})
-        reasoning = smell_analysis.get("reasoning", {})
-        metrics_evidence = smell_analysis.get("evidence", {})
-        
         # Build a comprehensive refactoring prompt
         smell_instructions = []
-        for smell in detected_smells:
-            smell_instructions.append(f"""
+        if smell_analysis:
+            detected_smells = smell_analysis.get("smells", [])
+            metrics = smell_analysis.get("metrics", {})
+            reasoning = smell_analysis.get("reasoning", {})
+            metrics_evidence = smell_analysis.get("evidence", {})
+            
+            for smell in detected_smells:
+                smell_instructions.append(f"""
 Code Smell: {smell}
 Reason: {reasoning.get(smell, 'No specific reason provided')}
 Evidence: {metrics_evidence.get(smell, 'No specific metrics evidence')}
@@ -246,14 +221,13 @@ Evidence: {metrics_evidence.get(smell, 'No specific metrics evidence')}
         # Build the base prompt
         base_prompt = f"""Please refactor the following Java code to address specific code smells detected by our analysis.
 
-Detected Code Smells and Analysis:
-{chr(10).join(smell_instructions)}
+{chr(10).join(smell_instructions) if smell_instructions else "No specific smells detected. Focus on general code quality improvement."}
 
 Code Metrics:
-{chr(10).join(f'- {metric}: {value}' for metric, value in metrics.items())}
+{chr(10).join(f'- {metric}: {value}' for metric, value in metrics.items()) if smell_analysis and metrics else "No metrics provided"}
 
 Additional Requirements:
-1. Focus ONLY on fixing the detected code smells
+1. Focus on improving code quality and readability
 2. Maintain the original functionality
 3. Preserve test compatibility
 4. Document changes inline
@@ -266,23 +240,31 @@ Original Code:
 ```
 
 Please provide:
-1. The refactored code with inline comments explaining smell-related changes
-2. A brief summary of how each detected smell was addressed
+1. The refactored code with inline comments explaining changes
+2. A brief summary of improvements made
 3. Any potential impact on performance or functionality"""
 
-        # Make API request
-        response = client.chat.completions.create(
-            model=model,
-            messages=[{
-                "role": "user",
-                "content": base_prompt
-            }],
-            temperature=0.2,
-            max_tokens=4096
+        # Make API request to Ollama
+        response = requests.post(
+            "http://86.50.169.115:11434/api/generate",
+            json={
+                "model": model_name,
+                "prompt": base_prompt,
+                "stream": False,
+                "options": {
+                    "temperature": 0.2,
+                    "num_predict": 4096
+                }
+            }
         )
         
+        if response.status_code != 200:
+            logger.error(f"Error from Ollama API: {response.status_code}")
+            return code
+            
         # Extract refactored code from response
-        response_text = response.choices[0].message.content
+        response_json = response.json()
+        response_text = response_json.get("response", "")
         
         # Extract code block if present
         code_pattern = r"```java\n(.*?)```"
@@ -297,34 +279,13 @@ Please provide:
     except Exception as e:
         error_msg = f"Error during refactoring: {str(e)}"
         logger.error(error_msg)
-        return f"Error: {error_msg}"
+        return code
 
 def check_ollama_status(endpoint: str = "LOCAL") -> bool:
-    """
-    Check if the specified endpoint is available.
-    
-    Args:
-        endpoint: Name of the endpoint to check
-        
-    Returns:
-        bool: True if endpoint is available, False otherwise
-    """
+    """Check if the Ollama endpoint is available."""
     try:
-        endpoint_info = GPTLAB_ENDPOINTS.get(endpoint)
-        if not endpoint_info:
-            logger.warning(f"Endpoint {endpoint} not found")
-            return False
-            
-        # For local Ollama endpoint
-        if endpoint == "LOCAL":
-            response = requests.get("http://localhost:11434/api/tags")
-            return response.status_code == 200
-            
-        # For remote GPT-Lab endpoints
-        else:
-            response = requests.get(f"{endpoint_info['url']}health")
-            return response.status_code == 200
-            
+        response = requests.get("http://86.50.169.115:11434/api/tags")
+        return response.status_code == 200
     except Exception as e:
-        logger.warning(f"Failed to get status for endpoint {endpoint}: {str(e)}")
+        logger.warning(f"Failed to get status for Ollama endpoint: {str(e)}")
         return False 
