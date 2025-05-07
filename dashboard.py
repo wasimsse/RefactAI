@@ -1652,18 +1652,6 @@ def render_refactoring_tab():
     """Render the Refactoring tab content."""
     st.title("🛠️ Code Refactoring")
     
-    # Model selection section
-    st.subheader("Model Selection")
-    
-    # Model selection dropdown
-    selected_model = st.selectbox(
-        "Select Model",
-        options=MODEL_OPTIONS,
-        index=0,
-        help="Choose a model for code refactoring",
-        key="refactoring_model_select"
-    )
-    
     # Initialize session state variables
     if 'project_files' not in st.session_state:
         st.session_state.project_files = []
@@ -1718,6 +1706,54 @@ def render_refactoring_tab():
 
     # Refactoring configuration
     st.subheader("🔧 Refactoring Configuration")
+    
+    # Model selection section
+    st.markdown("### 🤖 Model Selection")
+    model_col1, model_col2 = st.columns([2, 1])
+    
+    with model_col1:
+        # Get available models from GPT-Lab
+        available_models = [
+            "llama3.2",
+            "llama3.1:70b-instruct-q4_K_M",
+            "codellama:7b",
+            "codegemma:7b",
+            "deepseek-coder:6.7b",
+            "phi4:14b-fp16",
+            "GPT-Lab/Viking-33B-cp2000B-GGUF:Q6_K",
+            "magicoder:7b"
+        ]
+        
+        selected_model = st.selectbox(
+            "Select Model",
+            options=available_models,
+            index=0,
+            help="Choose a model for code refactoring",
+            key="refactoring_model_select"
+        )
+    
+    with model_col2:
+        # Model parameters
+        temperature = st.slider(
+            "Temperature",
+            min_value=0.0,
+            max_value=1.0,
+            value=0.2,
+            step=0.1,
+            help="Higher values make output more creative but less focused"
+        )
+        
+        max_tokens = st.number_input(
+            "Max Tokens",
+            min_value=512,
+            max_value=4096,
+            value=2048,
+            step=512,
+            help="Maximum length of the generated response"
+        )
+    
+    # Refactoring patterns
+    st.markdown("### 🎯 Refactoring Patterns")
     refactoring_patterns = {
         "Extract Method": "Split long methods into smaller, focused ones",
         "Extract Class": "Move related fields and methods to a new class",
@@ -1743,7 +1779,7 @@ def render_refactoring_tab():
                 selected_patterns.append(pattern)
 
     # Refactoring button
-    if st.button("🔄 Refactor Code", key="refactoring_start_btn"):
+    if st.button("🔄 Refactor Code", key="refactoring_start_btn", use_container_width=True):
         if not selected_patterns:
             st.warning("Please select at least one refactoring pattern.")
             return
@@ -1765,23 +1801,21 @@ def render_refactoring_tab():
                 refactored_code = gptlab_chat(
                     prompt=prompt,
                     model=selected_model,
-                    temperature=0.2,
-                    max_tokens=2000
+                    temperature=temperature,
+                    max_tokens=max_tokens
                 )
                 
                 if "[Error" in refactored_code or "[Exception" in refactored_code:
                     st.error(f"Failed to refactor code: {refactored_code}")
                     return
-                    
-                # Display refactored code
-                st.subheader("Refactored Code")
-                st.code(refactored_code, language="java")
                 
                 # Save to session state
                 st.session_state.refactored_code = refactored_code
                 st.session_state.refactoring_metadata = {
                     "model": selected_model,
                     "patterns": selected_patterns,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 }
                 
@@ -1792,23 +1826,77 @@ def render_refactoring_tab():
                     "metadata": st.session_state.refactoring_metadata
                 })
                 
-                # Save button
-                if st.button("💾 Save Refactored Code", key="save_refactored_btn"):
-                    try:
-                        # Create refactored file path
-                        original_path = Path(file_path)
-                        refactored_path = original_path.parent / f"{original_path.stem}_refactored{original_path.suffix}"
-                        
-                        # Save refactored code
-                        with open(refactored_path, 'w') as f:
-                            f.write(refactored_code)
-                            
-                        st.success(f"✅ Saved refactored code to: {refactored_path}")
-                    except Exception as e:
-                        st.error(f"❌ Error saving refactored code: {str(e)}")
+                # Show preview
+                st.success("✅ Refactoring completed! Review the changes below.")
+                render_refactoring_preview(code_content, refactored_code)
                 
             except Exception as e:
                 st.error(f"❌ Error during refactoring: {str(e)}")
+    
+    # Show refactoring history if available
+    if st.session_state.refactoring_history:
+        with st.expander("📜 Refactoring History", expanded=False):
+            for i, history_item in enumerate(reversed(st.session_state.refactoring_history)):
+                st.markdown(f"### Version {len(st.session_state.refactoring_history) - i}")
+                st.markdown(f"**Model:** {history_item['metadata']['model']}")
+                st.markdown(f"**Patterns:** {', '.join(history_item['metadata']['patterns'])}")
+                st.markdown(f"**Timestamp:** {history_item['metadata']['timestamp']}")
+                
+                if st.button(f"View Changes", key=f"view_history_{i}"):
+                    render_refactoring_preview(
+                        history_item['original'],
+                        history_item['refactored']
+                    )
+
+def render_refactoring_preview(original_code: str, refactored_code: str):
+    """Render a preview of the refactoring changes with diff highlighting."""
+    st.markdown("### 📝 Code Changes Preview")
+    
+    # Create diff
+    diff = list(difflib.unified_diff(
+        original_code.splitlines(),
+        refactored_code.splitlines(),
+        lineterm=''
+    ))
+    
+    if not diff:
+        st.info("No changes detected in the code.")
+        return
+    
+    # Display diff with syntax highlighting
+    diff_text = '\n'.join(diff)
+    st.code(diff_text, language="diff")
+    
+    # Add explanation of changes
+    st.markdown("### 📋 Changes Summary")
+    
+    # Count changes
+    additions = sum(1 for line in diff if line.startswith('+') and not line.startswith('+++'))
+    deletions = sum(1 for line in diff if line.startswith('-') and not line.startswith('---'))
+    
+    # Display statistics
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Lines Added", additions)
+    with col2:
+        st.metric("Lines Removed", deletions)
+    with col3:
+        st.metric("Net Change", additions - deletions)
+    
+    # Add save button
+    if st.button("💾 Save Refactored Code", key="save_refactored_btn", use_container_width=True):
+        try:
+            # Get the current file path
+            file_path = Path(st.session_state.selected_file)
+            refactored_path = file_path.parent / f"{file_path.stem}_refactored{file_path.suffix}"
+            
+            # Save refactored code
+            with open(refactored_path, 'w') as f:
+                f.write(refactored_code)
+                
+            st.success(f"✅ Saved refactored code to: {refactored_path}")
+        except Exception as e:
+            st.error(f"❌ Error saving refactored code: {str(e)}")
 
 def render_testing_tab():
     """Render the Testing & Metrics tab content."""
