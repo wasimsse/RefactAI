@@ -23,6 +23,7 @@ import html
 import pandas as pd
 from gptlab_test import gptlab_chat, MODEL_OPTIONS  # Import what we need from gptlab_test
 from refactoring.engine import RefactoringEngine
+from gptlab_integration import refactor_with_gptlab, render_refactoring_preview
 
 # Configure root logger
 logging.basicConfig(
@@ -1649,10 +1650,12 @@ def render_detection_tab():
             return
 
 def render_refactoring_tab():
-    """Render the Refactoring tab content."""
+    """Render the Refactoring tab content with a professional workflow."""
     st.title("🛠️ Code Refactoring")
     
     # Initialize session state variables
+    if 'refactoring_step' not in st.session_state:
+        st.session_state.refactoring_step = 1
     if 'project_files' not in st.session_state:
         st.session_state.project_files = []
     if 'selected_file' not in st.session_state:
@@ -1670,7 +1673,7 @@ def render_refactoring_tab():
     
     # Check if project is loaded
     if not st.session_state.project_manager.project_path:
-        st.warning("Please upload a project first")
+        st.warning("⚠️ Please upload a project first in the Project Upload tab.")
         return
     
     # Get Java files from project
@@ -1678,225 +1681,278 @@ def render_refactoring_tab():
                   if f["path"].endswith(".java")]
     
     if not java_files:
-        st.warning("No Java files found. Please upload a project with Java files.")
+        st.warning("⚠️ No Java files found. Please upload a project with Java files.")
         return
-    
-    # File selection
-    file_options = [f["path"] for f in java_files]
-    selected_file = st.selectbox(
-        "Choose a file to refactor",
-        file_options,
-        key="refactoring_file_selector"
-    )
 
-    code_content = None
-    if selected_file:
-        # Read file content
-        file_path = Path(st.session_state.project_manager.project_path) / selected_file
-        try:
-            with open(file_path, 'r') as f:
-                code_content = f.read()
-                st.session_state.original_code = code_content
-            # Display original code
-            with st.expander("📄 Original Code", expanded=True):
-                st.code(code_content, language="java")
-        except Exception as e:
-            st.error(f"Error reading file: {str(e)}")
-            return
+    # Display workflow steps
+    steps = ["1. Select File", "2. Analyze Code", "3. Choose Patterns", "4. Preview Changes", "5. Apply Refactoring"]
+    current_step = st.session_state.refactoring_step
+    
+    # Create progress bar
+    progress = (current_step - 1) / (len(steps) - 1)
+    st.progress(progress)
+    
+    # Display steps with current step highlighted
+    cols = st.columns(len(steps))
+    for i, (col, step) in enumerate(zip(cols, steps)):
+        with col:
+            if i + 1 == current_step:
+                st.markdown(f"**{step}** 🎯")
+            else:
+                st.markdown(step)
+    
+    st.divider()
 
-    # Refactoring configuration
-    st.subheader("🔧 Refactoring Configuration")
-    
-    # Model selection section
-    st.markdown("### 🤖 Model Selection")
-    model_col1, model_col2 = st.columns([2, 1])
-    
-    with model_col1:
-        # Get available models from GPT-Lab
-        available_models = [
-            "llama3.2",
-            "llama3.1:70b-instruct-q4_K_M",
-            "codellama:7b",
-            "codegemma:7b",
-            "deepseek-coder:6.7b",
-            "phi4:14b-fp16",
-            "GPT-Lab/Viking-33B-cp2000B-GGUF:Q6_K",
-            "magicoder:7b"
+    # Step 1: File Selection
+    if current_step == 1:
+        st.markdown("### 📁 Select File to Refactor")
+        st.caption("Choose a Java file to begin the refactoring process.")
+        
+        # File selection with search
+        search_query = st.text_input("🔍 Search files", placeholder="Type to filter files...")
+        filtered_files = [
+            f for f in java_files
+            if not search_query or search_query.lower() in f["name"].lower() or search_query.lower() in f["path"].lower()
         ]
         
-        selected_model = st.selectbox(
-            "Select Model",
-            options=available_models,
-            index=0,
-            help="Choose a model for code refactoring",
-            key="refactoring_model_select"
-        )
-    
-    with model_col2:
-        # Model parameters
-        temperature = st.slider(
-            "Temperature",
-            min_value=0.0,
-            max_value=1.0,
-            value=0.2,
-            step=0.1,
-            help="Higher values make output more creative but less focused"
+        selected_file = st.selectbox(
+            "Select a file to refactor",
+            options=filtered_files,
+            format_func=lambda x: f"📄 {x['path']}",
+            key="refactoring_file_selector"
         )
         
-        max_tokens = st.number_input(
-            "Max Tokens",
-            min_value=512,
-            max_value=4096,
-            value=2048,
-            step=512,
-            help="Maximum length of the generated response"
-        )
-    
-    # Refactoring patterns
-    st.markdown("### 🎯 Refactoring Patterns")
-    refactoring_patterns = {
-        "Extract Method": "Split long methods into smaller, focused ones",
-        "Extract Class": "Move related fields and methods to a new class",
-        "Rename Symbol": "Improve naming of variables, methods, or classes",
-        "Move Method": "Move method to a more appropriate class",
-        "Encapsulate Field": "Make fields private and provide accessors",
-        "Replace Conditional with Polymorphism": "Use inheritance instead of conditionals",
-        "Introduce Parameter Object": "Group parameters into an object",
-        "Extract Interface": "Create interface from common methods"
-    }
-    
-    col1, col2 = st.columns(2)
-    selected_patterns = []
-    with col1:
-        st.markdown("##### Select Refactoring Patterns")
-        for pattern, description in list(refactoring_patterns.items())[:4]:
-            if st.checkbox(pattern, help=description, key=f"pattern_{pattern}"):
-                selected_patterns.append(pattern)
-    with col2:
-        st.markdown("##### Additional Patterns")
-        for pattern, description in list(refactoring_patterns.items())[4:]:
-            if st.checkbox(pattern, help=description, key=f"pattern_{pattern}"):
-                selected_patterns.append(pattern)
-
-    # Refactoring button
-    if st.button("🔄 Refactor Code", key="refactoring_start_btn", use_container_width=True):
-        if not selected_patterns:
-            st.warning("Please select at least one refactoring pattern.")
-            return
-            
-        if not code_content:
-            st.warning("Please select a file to refactor.")
-            return
-            
-        with st.spinner(f"Refactoring code using {selected_model}..."):
+        if selected_file:
             try:
-                # Call GPT-Lab API for refactoring
-                prompt = f"""Please refactor the following Java code applying these patterns: {', '.join(selected_patterns)}
+                # Read file content
+                file_path = Path(st.session_state.project_manager.project_path) / selected_file["path"]
+                with open(file_path, 'r') as f:
+                    code_content = f.read()
+                    st.session_state.original_code = code_content
                 
-                Original code:
-                {code_content}
+                # Display file info
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown(f"**File:** {selected_file['name']}")
+                    st.markdown(f"**Path:** {selected_file['path']}")
+                with col2:
+                    st.markdown(f"**Size:** {format_file_size(selected_file['size'])}")
+                    st.markdown(f"**Last Modified:** {datetime.fromtimestamp(file_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')}")
                 
-                Please provide the refactored code with explanations of the changes made."""
+                # Preview code
+                with st.expander("📄 Preview Code", expanded=True):
+                    st.code(code_content, language="java")
                 
-                refactored_code = gptlab_chat(
-                    prompt=prompt,
-                    model=selected_model,
-                    temperature=temperature,
-                    max_tokens=max_tokens
-                )
+                if st.button("Next: Analyze Code", use_container_width=True):
+                    st.session_state.refactoring_step = 2
+                    st.session_state.selected_file = selected_file
+                    st.rerun()
+                    
+            except Exception as e:
+                st.error(f"Error reading file: {str(e)}")
+                return
+
+    # Step 2: Code Analysis
+    elif current_step == 2:
+        st.markdown("### 🔍 Code Analysis")
+        st.caption("Analyzing code quality and identifying potential improvements.")
+        
+        if not st.session_state.original_code:
+            st.error("No code loaded. Please go back and select a file.")
+            return
+        
+        # Run analysis
+        with st.spinner("Analyzing code..."):
+            # Basic metrics
+            basic_metrics = calculate_basic_metrics(st.session_state.original_code)
+            advanced_metrics = calculate_advanced_metrics(st.session_state.original_code, basic_metrics)
+            
+            # Display metrics
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Lines of Code", basic_metrics["loc"])
+                st.metric("Methods", basic_metrics["total_methods"])
+            with col2:
+                st.metric("Complexity", advanced_metrics["cc"]["value"])
+                st.metric("Coupling", advanced_metrics["cbo"]["value"])
+            with col3:
+                st.metric("Cohesion", advanced_metrics["lcom"]["value"])
+                st.metric("Inheritance", advanced_metrics["dit"]["value"])
+            
+            # Code smells detection
+            st.markdown("### 🚨 Detected Code Smells")
+            detected_smells = analyze_code_smells(st.session_state.original_code)
+            st.session_state.detected_smells = detected_smells
+            
+            if detected_smells:
+                for smell, details in detected_smells.items():
+                    with st.expander(f"⚠️ {smell}", expanded=True):
+                        st.markdown(f"**Location:** {details['location']}")
+                        st.markdown(f"**Description:** {details['description']}")
+                        st.markdown(f"**Suggestion:** {details['suggestion']}")
+            else:
+                st.success("✅ No code smells detected!")
+            
+            # Navigation buttons
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("← Back to File Selection", use_container_width=True):
+                    st.session_state.refactoring_step = 1
+                    st.rerun()
+            with col2:
+                if st.button("Next: Choose Patterns →", use_container_width=True):
+                    st.session_state.refactoring_step = 3
+                    st.rerun()
+
+    # Step 3: Pattern Selection
+    elif current_step == 3:
+        st.markdown("### 🎯 Choose Refactoring Patterns")
+        st.caption("Select the refactoring patterns to apply based on the analysis.")
+        
+        # Refactoring patterns with descriptions
+        refactoring_patterns = {
+            "Extract Method": {
+                "description": "Split long methods into smaller, focused ones",
+                "icon": "🔧",
+                "applicable": "Long Method" in [s for s in st.session_state.detected_smells.keys()]
+            },
+            "Extract Class": {
+                "description": "Move related fields and methods to a new class",
+                "icon": "📦",
+                "applicable": "God Class" in [s for s in st.session_state.detected_smells.keys()]
+            },
+            "Move Method": {
+                "description": "Move method to a more appropriate class",
+                "icon": "↗️",
+                "applicable": "Feature Envy" in [s for s in st.session_state.detected_smells.keys()]
+            },
+            "Encapsulate Field": {
+                "description": "Make fields private and provide accessors",
+                "icon": "🔒",
+                "applicable": "Data Class" in [s for s in st.session_state.detected_smells.keys()]
+            },
+            "Replace Conditional with Polymorphism": {
+                "description": "Use inheritance instead of conditionals",
+                "icon": "🔄",
+                "applicable": "Complex Class" in [s for s in st.session_state.detected_smells.keys()]
+            }
+        }
+        
+        # Display patterns in a grid
+        cols = st.columns(2)
+        selected_patterns = []
+        
+        for i, (pattern, info) in enumerate(refactoring_patterns.items()):
+            with cols[i % 2]:
+                if st.checkbox(
+                    f"{info['icon']} {pattern}",
+                    help=info["description"],
+                    disabled=not info["applicable"],
+                    key=f"pattern_{pattern}"
+                ):
+                    selected_patterns.append(pattern)
+        
+        # Navigation buttons
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("← Back to Analysis", use_container_width=True):
+                st.session_state.refactoring_step = 2
+                st.rerun()
+        with col2:
+            if st.button("Next: Preview Changes →", use_container_width=True):
+                st.session_state.refactoring_step = 4
+                st.session_state.selected_patterns = selected_patterns
+                st.rerun()
+
+    # Step 4: Preview Changes
+    elif current_step == 4:
+        st.markdown("### 👀 Preview Changes")
+        st.caption("Review the proposed changes before applying them.")
+        
+        if not st.session_state.original_code or not st.session_state.selected_patterns:
+            st.error("Missing required information. Please go back and complete previous steps.")
+            return
+        
+        # Generate refactored code
+        with st.spinner("Generating refactored code..."):
+            refactored_code, metadata = generate_refactoring(
+                st.session_state.original_code,
+                st.session_state.selected_patterns,
+                st.session_state.detected_smells
+            )
+            st.session_state.refactored_code = refactored_code
+            st.session_state.refactoring_metadata = metadata
+        
+        # Display side-by-side comparison
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("### Original Code")
+            st.code(st.session_state.original_code, language="java")
+        with col2:
+            st.markdown("### Refactored Code")
+            st.code(refactored_code, language="java")
+        
+        # Show changes
+        st.markdown("### 📊 Changes Summary")
+        render_refactoring_preview(st.session_state.original_code, refactored_code)
+        
+        # Navigation buttons
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("← Back to Patterns", use_container_width=True):
+                st.session_state.refactoring_step = 3
+                st.rerun()
+        with col2:
+            if st.button("Next: Apply Refactoring →", use_container_width=True):
+                st.session_state.refactoring_step = 5
+                st.rerun()
+
+    # Step 5: Apply Refactoring
+    elif current_step == 5:
+        st.markdown("### ✅ Apply Refactoring")
+        st.caption("Apply the refactoring changes to your code.")
+        
+        if not st.session_state.refactored_code:
+            st.error("No refactored code available. Please go back and complete previous steps.")
+            return
+        
+        # Confirmation
+        st.markdown("### Are you sure you want to apply these changes?")
+        st.markdown("The following changes will be made:")
+        
+        # Show changes summary
+        render_refactoring_preview(st.session_state.original_code, st.session_state.refactored_code)
+        
+        # Apply changes
+        if st.button("Apply Changes", type="primary", use_container_width=True):
+            try:
+                # Save refactored code
+                file_path = Path(st.session_state.project_manager.project_path) / st.session_state.selected_file["path"]
+                with open(file_path, 'w') as f:
+                    f.write(st.session_state.refactored_code)
                 
-                if "[Error" in refactored_code or "[Exception" in refactored_code:
-                    st.error(f"Failed to refactor code: {refactored_code}")
-                    return
-                
-                # Save to session state
-                st.session_state.refactored_code = refactored_code
-                st.session_state.refactoring_metadata = {
-                    "model": selected_model,
-                    "patterns": selected_patterns,
-                    "temperature": temperature,
-                    "max_tokens": max_tokens,
-                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                }
-                
-                # Add to history
+                # Update history
                 st.session_state.refactoring_history.append({
-                    "original": code_content,
-                    "refactored": refactored_code,
-                    "metadata": st.session_state.refactoring_metadata
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "file": st.session_state.selected_file["path"],
+                    "patterns": st.session_state.selected_patterns,
+                    "before_metrics": calculate_basic_metrics(st.session_state.original_code),
+                    "after_metrics": calculate_basic_metrics(st.session_state.refactored_code)
                 })
                 
-                # Show preview
-                st.success("✅ Refactoring completed! Review the changes below.")
-                render_refactoring_preview(code_content, refactored_code)
+                st.success("✅ Refactoring applied successfully!")
+                
+                # Reset workflow
+                st.session_state.refactoring_step = 1
+                st.rerun()
                 
             except Exception as e:
-                st.error(f"❌ Error during refactoring: {str(e)}")
-    
-    # Show refactoring history if available
-    if st.session_state.refactoring_history:
-        with st.expander("📜 Refactoring History", expanded=False):
-            for i, history_item in enumerate(reversed(st.session_state.refactoring_history)):
-                st.markdown(f"### Version {len(st.session_state.refactoring_history) - i}")
-                st.markdown(f"**Model:** {history_item['metadata']['model']}")
-                st.markdown(f"**Patterns:** {', '.join(history_item['metadata']['patterns'])}")
-                st.markdown(f"**Timestamp:** {history_item['metadata']['timestamp']}")
-                
-                if st.button(f"View Changes", key=f"view_history_{i}"):
-                    render_refactoring_preview(
-                        history_item['original'],
-                        history_item['refactored']
-                    )
-
-def render_refactoring_preview(original_code: str, refactored_code: str):
-    """Render a preview of the refactoring changes with diff highlighting."""
-    st.markdown("### 📝 Code Changes Preview")
-    
-    # Create diff
-    diff = list(difflib.unified_diff(
-        original_code.splitlines(),
-        refactored_code.splitlines(),
-        lineterm=''
-    ))
-    
-    if not diff:
-        st.info("No changes detected in the code.")
-        return
-    
-    # Display diff with syntax highlighting
-    diff_text = '\n'.join(diff)
-    st.code(diff_text, language="diff")
-    
-    # Add explanation of changes
-    st.markdown("### 📋 Changes Summary")
-    
-    # Count changes
-    additions = sum(1 for line in diff if line.startswith('+') and not line.startswith('+++'))
-    deletions = sum(1 for line in diff if line.startswith('-') and not line.startswith('---'))
-    
-    # Display statistics
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Lines Added", additions)
-    with col2:
-        st.metric("Lines Removed", deletions)
-    with col3:
-        st.metric("Net Change", additions - deletions)
-    
-    # Add save button
-    if st.button("💾 Save Refactored Code", key="save_refactored_btn", use_container_width=True):
-        try:
-            # Get the current file path
-            file_path = Path(st.session_state.selected_file)
-            refactored_path = file_path.parent / f"{file_path.stem}_refactored{file_path.suffix}"
-            
-            # Save refactored code
-            with open(refactored_path, 'w') as f:
-                f.write(refactored_code)
-                
-            st.success(f"✅ Saved refactored code to: {refactored_path}")
-        except Exception as e:
-            st.error(f"❌ Error saving refactored code: {str(e)}")
+                st.error(f"Error applying changes: {str(e)}")
+        
+        # Navigation buttons
+        if st.button("← Back to Preview", use_container_width=True):
+            st.session_state.refactoring_step = 4
+            st.rerun()
 
 def render_testing_tab():
     """Render the Testing & Metrics tab content."""
@@ -1991,6 +2047,128 @@ MODEL_OPTIONS = [
     "GPT-Lab/Viking-33B-cp2000B-GGUF:Q6_K",
     "magicoder:7b"
 ]
+
+def calculate_basic_metrics(content: str) -> dict:
+    """Calculate basic code metrics for a Java file."""
+    try:
+        # Initialize metrics
+        metrics = {
+            "loc": 0,  # Lines of Code
+            "total_methods": 0,  # Total number of methods
+            "wmc": 0,  # Weighted Methods per Class
+            "getters_setters": 0,  # Number of getters and setters
+            "loc_threshold": 200,  # Threshold for LOC
+            "wmc_threshold": 20,  # Threshold for WMC
+            "methods_threshold": 5  # Threshold for number of methods
+        }
+        
+        # Count lines of code (excluding comments and empty lines)
+        lines = content.split('\n')
+        for line in lines:
+            line = line.strip()
+            if line and not line.startswith('//') and not line.startswith('/*') and not line.startswith('*'):
+                metrics["loc"] += 1
+        
+        # Count methods and calculate WMC
+        method_pattern = r'(public|private|protected)?\s+(static\s+)?(\w+)\s+(\w+)\s*\([^)]*\)\s*{'
+        methods = re.finditer(method_pattern, content)
+        
+        for method in methods:
+            metrics["total_methods"] += 1
+            
+            # Calculate method complexity (simple version)
+            method_content = content[method.start():]
+            method_end = method_content.find('}')
+            if method_end != -1:
+                method_content = method_content[:method_end]
+                complexity = len(re.findall(r'\b(if|for|while|case|catch)\b', method_content))
+                metrics["wmc"] += complexity
+            
+            # Count getters and setters
+            method_name = method.group(4)
+            if method_name.startswith('get') or method_name.startswith('set'):
+                metrics["getters_setters"] += 1
+        
+        return metrics
+        
+    except Exception as e:
+        st.error(f"Error calculating basic metrics: {str(e)}")
+        return {
+            "loc": 0,
+            "total_methods": 0,
+            "wmc": 0,
+            "getters_setters": 0,
+            "loc_threshold": 200,
+            "wmc_threshold": 20,
+            "methods_threshold": 5
+        }
+
+def analyze_code_smells(content: str) -> dict:
+    """Analyze code and return a dictionary of detected code smells with details."""
+    smells = {}
+    metrics = calculate_basic_metrics(content)
+    # God Class: Large LOC and many methods
+    if metrics["loc"] > 200 and metrics["total_methods"] > 10:
+        smells["God Class"] = {
+            "location": "Class",
+            "description": "Class is very large and does too much.",
+            "suggestion": "Consider splitting into smaller classes."
+        }
+    # Long Method: Any method with >40 lines
+    long_methods = re.findall(r'(public|private|protected)?\s+(static\s+)?(\w+)\s+(\w+)\s*\([^)]*\)\s*{([\s\S]*?)}', content)
+    for m in long_methods:
+        method_body = m[4]
+        if len(method_body.split('\n')) > 40:
+            smells["Long Method"] = {
+                "location": f"Method: {m[3]}",
+                "description": "Method is too long.",
+                "suggestion": "Extract smaller methods."
+            }
+            break
+    # Data Class: Many getters/setters, few other methods
+    if metrics["total_methods"] > 0 and metrics["getters_setters"] / metrics["total_methods"] > 0.7:
+        smells["Data Class"] = {
+            "location": "Class",
+            "description": "Class mainly contains data and accessors.",
+            "suggestion": "Add behavior or refactor responsibilities."
+        }
+    # Feature Envy: Many external calls (very basic heuristic)
+    if len(re.findall(r'\w+\.\w+\(', content)) > 10:
+        smells["Feature Envy"] = {
+            "location": "Methods",
+            "description": "Methods use many features of other classes.",
+            "suggestion": "Move methods to more appropriate classes."
+        }
+    # Complex Class: Many branches
+    if len(re.findall(r'\b(if|for|while|case|catch)\b', content)) > 30:
+        smells["Complex Class"] = {
+            "location": "Class",
+            "description": "Class has high cyclomatic complexity.",
+            "suggestion": "Simplify logic or split class."
+        }
+    return smells
+
+def generate_refactoring(original_code, selected_patterns, detected_smells):
+    """
+    Generate refactored code using GPT-Lab or local LLM.
+    Returns (refactored_code, metadata).
+    """
+    if not selected_patterns:
+        return original_code, {"success": False, "reason": "No patterns selected."}
+    # Prepare additional instructions
+    instructions = f"Apply the following refactoring patterns: {', '.join(selected_patterns)}."
+    # Use detected smells as context
+    try:
+        refactored_code = refactor_with_gptlab(
+            code=original_code,
+            model_name=st.session_state.get('current_model', 'llama3.2'),
+            smell_analysis=detected_smells,
+            additional_instructions=instructions,
+            temperature=st.session_state.get('refactoring_sidebar_temperature', 0.3)
+        )
+        return refactored_code, {"success": True, "patterns": selected_patterns}
+    except Exception as e:
+        return original_code, {"success": False, "reason": str(e)}
 
 if __name__ == "__main__":
     main() 
