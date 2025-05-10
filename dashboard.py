@@ -2159,16 +2159,30 @@ def generate_refactoring(original_code, selected_patterns, detected_smells):
     instructions = f"Apply the following refactoring patterns: {', '.join(selected_patterns)}."
     # Use detected smells as context
     try:
+        st.info(f"Prompt being sent to LLM:\n{instructions}")
+        # Force use of GPT-Lab model
+        model_to_use = st.session_state.get('selected_model', MODEL_OPTIONS[0])
+        st.info(f"Using GPT-Lab model: {model_to_use}")
         refactored_code = refactor_with_gptlab(
             code=original_code,
-            model_name=st.session_state.get('current_model', 'llama3.2'),
+            model_name=model_to_use,
             smell_analysis=detected_smells,
             additional_instructions=instructions,
             temperature=st.session_state.get('refactoring_sidebar_temperature', 0.3)
         )
+        st.info(f"LLM response:\n{refactored_code[:500]}")  # Show first 500 chars
         return refactored_code, {"success": True, "patterns": selected_patterns}
     except Exception as e:
         return original_code, {"success": False, "reason": str(e)}
+
+GPTLAB_ENDPOINTS = {
+    "CLOUD": {
+        "url": "https://gptlab.rd.tuni.fi/GPT-Lab/resources/RANDOM/v1",
+        "hardware": "Cloud GPU",
+        "status": "active"
+    }
+}
+GPTLAB_BEARER_TOKEN = "sk-ollama-gptlab-6cc87c9bd38b24aca0fe77f0c9c4d68d"
 
 if __name__ == "__main__":
     main() 
