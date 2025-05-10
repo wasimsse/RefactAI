@@ -1708,29 +1708,29 @@ def render_refactoring_tab():
         st.markdown("### 📁 Select File to Refactor")
         st.caption("Choose a Java file to begin the refactoring process.")
         
-        # File selection with search
+        # Search/filter
         search_query = st.text_input("🔍 Search files", placeholder="Type to filter files...")
         filtered_files = [
             f for f in java_files
             if not search_query or search_query.lower() in f["name"].lower() or search_query.lower() in f["path"].lower()
         ]
-        
+
+        # File selection dropdown
         selected_file = st.selectbox(
             "Select a file to refactor",
             options=filtered_files,
             format_func=lambda x: f"📄 {x['path']}",
             key="refactoring_file_selector"
         )
-        
+
         if selected_file:
             try:
-                # Read file content
                 file_path = Path(st.session_state.project_manager.project_path) / selected_file["path"]
                 with open(file_path, 'r') as f:
                     code_content = f.read()
                     st.session_state.original_code = code_content
-                
-                # Display file info
+
+                # Show file info
                 col1, col2 = st.columns(2)
                 with col1:
                     st.markdown(f"**File:** {selected_file['name']}")
@@ -1738,16 +1738,15 @@ def render_refactoring_tab():
                 with col2:
                     st.markdown(f"**Size:** {format_file_size(selected_file['size'])}")
                     st.markdown(f"**Last Modified:** {datetime.fromtimestamp(file_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')}")
-                
+
                 # Preview code
                 with st.expander("📄 Preview Code", expanded=True):
                     st.code(code_content, language="java")
-                
+
                 if st.button("Next: Analyze Code", use_container_width=True):
                     st.session_state.refactoring_step = 2
                     st.session_state.selected_file = selected_file
                     st.rerun()
-                    
             except Exception as e:
                 st.error(f"Error reading file: {str(e)}")
                 return
@@ -1868,21 +1867,35 @@ def render_refactoring_tab():
     elif current_step == 4:
         st.markdown("### 👀 Preview Changes")
         st.caption("Review the proposed changes before applying them.")
-        
-        if not st.session_state.original_code or not st.session_state.selected_patterns:
-            st.error("Missing required information. Please go back and complete previous steps.")
-            return
-        
-        # Generate refactored code
-        with st.spinner("Generating refactored code..."):
-            refactored_code, metadata = generate_refactoring(
-                st.session_state.original_code,
-                st.session_state.selected_patterns,
-                st.session_state.detected_smells
-            )
-            st.session_state.refactored_code = refactored_code
-            st.session_state.refactoring_metadata = metadata
-        
+
+        # Model selection for refactoring (under Preview Changes)
+        st.markdown("#### Select LLM Model for Refactoring")
+        selected_model = st.selectbox(
+            "Choose a model:",
+            MODEL_OPTIONS,
+            key="refactoring_model_preview",
+            help="Choose which LLM to use for this refactoring"
+        )
+        rerun_refactor = False
+        if 'selected_model' not in st.session_state or st.session_state['selected_model'] != selected_model:
+            st.session_state['selected_model'] = selected_model
+            rerun_refactor = True
+        else:
+            selected_model = st.session_state['selected_model']
+
+        # Only rerun refactoring if model changed or not yet run
+        if rerun_refactor or 'last_refactored_model' not in st.session_state or st.session_state['last_refactored_model'] != selected_model:
+            st.session_state['last_refactored_model'] = selected_model
+            # Generate refactored code
+            with st.spinner("Generating refactored code..."):
+                refactored_code, metadata = generate_refactoring(
+                    st.session_state.original_code,
+                    st.session_state.selected_patterns,
+                    st.session_state.detected_smells
+                )
+                st.session_state.refactored_code = refactored_code
+                st.session_state.refactoring_metadata = metadata
+
         # Display side-by-side comparison
         col1, col2 = st.columns(2)
         with col1:
@@ -1890,12 +1903,12 @@ def render_refactoring_tab():
             st.code(st.session_state.original_code, language="java")
         with col2:
             st.markdown("### Refactored Code")
-            st.code(refactored_code, language="java")
-        
+            st.code(st.session_state.refactored_code, language="java")
+
         # Show changes
         st.markdown("### 📊 Changes Summary")
-        render_refactoring_preview(st.session_state.original_code, refactored_code)
-        
+        render_refactoring_preview(st.session_state.original_code, st.session_state.refactored_code)
+
         # Navigation buttons
         col1, col2 = st.columns(2)
         with col1:
