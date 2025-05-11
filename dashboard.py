@@ -1073,108 +1073,85 @@ def analyze_project_classes():
                 continue
 
 def calculate_advanced_metrics(content: str, basic_metrics: dict) -> dict:
-    """Calculate advanced software metrics for a Java class."""
     try:
-        # Ensure basic_metrics has required fields
-        if not basic_metrics or not isinstance(basic_metrics, dict):
-            return {
-                "lcom": {"value": 0, "threshold": 0.7, "status": "low", "icon": "🧩", "help": "Metrics calculation failed"},
-                "cbo": {"value": 0, "threshold": 5, "status": "low", "icon": "🔗", "help": "Metrics calculation failed"},
-                "dit": {"value": 0, "threshold": 3, "status": "low", "icon": "📐", "help": "Metrics calculation failed"},
-                "cc": {"value": 0, "threshold": 10, "status": "low", "icon": "🔄", "help": "Metrics calculation failed"},
-                "rfc": {"value": 0, "threshold": 20, "status": "low", "icon": "📡", "help": "Metrics calculation failed"}
-            }
-        
-        # LCOM calculation
+        # Old metrics (for UI compatibility)
         method_count = basic_metrics.get("total_methods", 0)
         lcom = min(0.1 * method_count, 1.0) if method_count > 0 else 0
-        
-        # CBO calculation
-        cbo = len(re.findall(r'import\s+[\w.]+;', content)) + \
-              len(re.findall(r'new\s+\w+\(', content))
-        
-        # DIT calculation
+        cbo = len(re.findall(r'import\s+[\w.]+;', content)) + len(re.findall(r'new\s+\w+\(', content))
         inheritance_chain = re.findall(r'extends\s+\w+', content)
         dit = len(inheritance_chain)
-        
-        # CC calculation
         cc = len(re.findall(r'\b(if|for|while|case|catch)\b', content))
-        
-        # RFC calculation
         rfc = len(re.findall(r'(\w+\s+\w+\s*\([^)]*\)\s*{|\w+\.[a-zA-Z_]\w*\s*\([^)]*\))', content))
-        
-        # Calculate thresholds and status
+
         metrics = {
-            "lcom": {
-                "value": round(lcom, 2),
-                "threshold": 0.7,
-                "status": "high" if lcom > 0.7 else "medium" if lcom > 0.4 else "low",
-                "icon": "🧩",
-                "help": "Lack of Cohesion of Methods (0-1). Lower is better."
-            },
-            "cbo": {
-                "value": cbo,
-                "threshold": 5,
-                "status": "high" if cbo > 5 else "medium" if cbo > 3 else "low",
-                "icon": "🔗",
-                "help": "Coupling Between Objects. Lower is better."
-            },
-            "dit": {
-                "value": dit,
-                "threshold": 3,
-                "status": "high" if dit > 3 else "medium" if dit > 2 else "low",
-                "icon": "📐",
-                "help": "Depth of Inheritance Tree. Lower is better."
-            },
-            "cc": {
-                "value": cc,
-                "threshold": 10,
-                "status": "high" if cc > 10 else "medium" if cc > 7 else "low",
-                "icon": "🔄",
-                "help": "Cyclomatic Complexity. Lower is better."
-            },
-            "rfc": {
-                "value": rfc,
-                "threshold": 20,
-                "status": "high" if rfc > 20 else "medium" if rfc > 15 else "low",
-                "icon": "📡",
-                "help": "Response For Class (methods + calls). Lower is better."
-            }
+            "lcom": {"value": round(lcom, 2), "threshold": 0.7, "status": "high" if lcom > 0.7 else "medium" if lcom > 0.4 else "low", "icon": "🧩", "help": "Lack of Cohesion of Methods (0-1). Lower is better."},
+            "cbo": {"value": cbo, "threshold": 5, "status": "high" if cbo > 5 else "medium" if cbo > 3 else "low", "icon": "🔗", "help": "Coupling Between Objects. Lower is better."},
+            "dit": {"value": dit, "threshold": 3, "status": "high" if dit > 3 else "medium" if dit > 2 else "low", "icon": "📐", "help": "Depth of Inheritance Tree. Lower is better."},
+            "cc": {"value": cc, "threshold": 10, "status": "high" if cc > 10 else "medium" if cc > 7 else "low", "icon": "🔄", "help": "Cyclomatic Complexity. Lower is better."},
+            "rfc": {"value": rfc, "threshold": 20, "status": "high" if rfc > 20 else "medium" if rfc > 15 else "low", "icon": "📡", "help": "Response For Class (methods + calls). Lower is better."}
         }
-        
+
+        # New metrics
+        num_fields = len(re.findall(r'(public|private|protected)?\s+\w+\s+\w+\s*(=|;)', content))
+        method_bodies = re.findall(r'(public|private|protected)?\s+(static\s+)?(\w+)\s+(\w+)\s*\([^)]*\)\s*{([\s\S]*?)}', content)
+        method_lengths = [len(m[4].split('\n')) for m in method_bodies if m[4].strip()]
+        avg_method_length = round(sum(method_lengths) / len(method_lengths), 2) if method_lengths else 0
+        max_method_length = max(method_lengths) if method_lengths else 0
+        total_lines = len(content.split('\n'))
+        comment_lines = len([l for l in content.split('\n') if l.strip().startswith('//') or l.strip().startswith('/*') or l.strip().startswith('*')])
+        comment_density = round((comment_lines / total_lines) * 100, 1) if total_lines > 0 else 0
+        num_classes = len(re.findall(r'\\bclass\\b', content))
+        num_interfaces = len(re.findall(r'\\binterface\\b', content))
+        num_enums = len(re.findall(r'\\benum\\b', content))
+
+        metrics.update({
+            "num_fields": {"value": num_fields, "status": "low", "icon": "🔢"},
+            "loc_per_method": {"value": avg_method_length, "status": "low", "icon": "📏"},
+            "max_method_length": {"value": max_method_length, "status": "low", "icon": "📏"},
+            "comment_density": {"value": comment_density, "status": "low", "icon": "💬"},
+            "num_methods": {"value": basic_metrics.get("total_methods", 0), "status": "low", "icon": "🔧"},
+            "num_public_methods": {"value": 0, "status": "low", "icon": "🔓"},  # Placeholder
+            "num_public_fields": {"value": 0, "status": "low", "icon": "🔓"},   # Placeholder
+        })
         return metrics
     except Exception as e:
-        st.error(f"Error calculating metrics: {str(e)}")
+        st.error(f"Error calculating advanced metrics: {str(e)}")
         return {
             "lcom": {"value": 0, "threshold": 0.7, "status": "low", "icon": "🧩", "help": "Calculation error"},
             "cbo": {"value": 0, "threshold": 5, "status": "low", "icon": "🔗", "help": "Calculation error"},
             "dit": {"value": 0, "threshold": 3, "status": "low", "icon": "📐", "help": "Calculation error"},
             "cc": {"value": 0, "threshold": 10, "status": "low", "icon": "🔄", "help": "Calculation error"},
-            "rfc": {"value": 0, "threshold": 20, "status": "low", "icon": "📡", "help": "Calculation error"}
+            "rfc": {"value": 0, "threshold": 20, "status": "low", "icon": "📡", "help": "Calculation error"},
+            "num_fields": {"value": 0, "status": "low", "icon": "🔢"},
+            "loc_per_method": {"value": 0, "status": "low", "icon": "📏"},
+            "max_method_length": {"value": 0, "status": "low", "icon": "📏"},
+            "comment_density": {"value": 0, "status": "low", "icon": "💬"},
+            "num_methods": {"value": 0, "status": "low", "icon": "🔧"},
+            "num_public_methods": {"value": 0, "status": "low", "icon": "🔓"},
+            "num_public_fields": {"value": 0, "status": "low", "icon": "🔓"},
         }
 
 def render_metric_card(label: str, metric: dict, help_text: str = "") -> None:
-    """Render a metric card with status indicators."""
     status_colors = {
         "low": ("#28a745", "✅"),
         "medium": ("#ffc107", "⚠️"),
-        "high": ("#dc3545", "⚠️")
+        "high": ("#dc3545", "❌")
     }
-    color, icon = status_colors[metric["status"]]
-    
+    color, icon = status_colors.get(metric["status"], ("#6c757d", "ℹ️"))
     st.markdown(f"""
     <div class="metric-card" style="border-left: 4px solid {color}; padding: 1rem;">
-        <div style="color: #666; font-size: 0.9em;">{metric["icon"]} {label}</div>
+        <div style="color: #666; font-size: 0.9em;">{metric["icon"]} {label}
+            <span title="{help_text}" style="cursor: help; color: #888;"> ⓘ</span>
+        </div>
         <div style="font-size: 1.5em; font-weight: bold; color: {color};">
             {metric["value"]} {icon}
         </div>
         <div style="font-size: 0.8em; color: #666;">
-            Threshold: {metric["threshold"]}
-            {f'<br>{help_text}' if help_text else ''}
+            Threshold: {metric.get("threshold", "-")}
         </div>
     </div>
     """, unsafe_allow_html=True)
-
+    
 def format_metric_evidence(metric_name: str, value: float, threshold: float, comparison: str = ">") -> str:
     """Format metric evidence with value and threshold."""
     return f"{metric_name} = {value:.2f} {comparison} {threshold:.2f} threshold"
@@ -1194,30 +1171,35 @@ def normalize_metrics(metrics: dict) -> dict:
     }
 
 def render_metrics_chart(metrics: dict):
-    """Render a bar chart for metrics visualization."""
+    """Render a bar or radar chart for metrics visualization."""
     try:
         import plotly.graph_objects as go
-        
-        # Normalize metrics for visualization
-        norm_metrics = normalize_metrics(metrics)
-        
-        # Prepare data for radar chart
+
+        # Only use metrics that are in max_values
+        max_values = {
+            "lcom": 1.0,
+            "cbo": 10.0,
+            "dit": 5.0,
+            "cc": 15.0,
+            "rfc": 30.0
+        }
+        filtered_metrics = {k: v for k, v in metrics.items() if k in max_values}
+        if not filtered_metrics:
+            st.warning("No complexity metrics available for chart.")
+            return None
+
+        norm_metrics = {k: min(v["value"] / max_values[k], 1.0) for k, v in filtered_metrics.items()}
         categories = list(norm_metrics.keys())
         values = list(norm_metrics.values())
-        
-        # Create radar chart
+        thresholds = [filtered_metrics[k]["threshold"] / max_values[k] for k in categories]
+
         fig = go.Figure()
-        
-        # Add metrics trace
         fig.add_trace(go.Scatterpolar(
             r=values,
             theta=categories,
             fill='toself',
             name='Current Values'
         ))
-        
-        # Add threshold trace
-        thresholds = [metrics[k]["threshold"] / max_values.get(k, 1.0) for k in categories]
         fig.add_trace(go.Scatterpolar(
             r=thresholds,
             theta=categories,
@@ -1226,31 +1208,36 @@ def render_metrics_chart(metrics: dict):
             fillcolor='rgba(255, 0, 0, 0.2)',
             line=dict(color='red', dash='dot')
         ))
-        
-        # Update layout
         fig.update_layout(
-            polar=dict(
-                radialaxis=dict(
-                    visible=True,
-                    range=[0, 1]
-                )
-            ),
+            polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
             showlegend=True,
-            title="Metrics Overview (Normalized)",
+            title="Complexity Metrics Overview (Normalized)",
             height=400
         )
-        
         return fig
-        
     except ImportError:
-        # Fallback to simple bar chart if plotly is not available
         import pandas as pd
+        # Only use supported metrics for the bar chart as well
+        max_values = {
+            "lcom": 1.0,
+            "cbo": 10.0,
+            "dit": 5.0,
+            "cc": 15.0,
+            "rfc": 30.0
+        }
+        filtered_metrics = {k: v for k, v in metrics.items() if k in max_values}
+        if not filtered_metrics:
+            st.warning("No complexity metrics available for chart.")
+            return None
         chart_data = pd.DataFrame({
-            'Metric': list(metrics.keys()),
-            'Value': [m["value"] for m in metrics.values()],
-            'Threshold': [m["threshold"] for m in metrics.values()]
+            'Metric': list(filtered_metrics.keys()),
+            'Value': [m["value"] for m in filtered_metrics.values()],
+            'Threshold': [m["threshold"] for m in filtered_metrics.values()]
         })
         return chart_data
+    except Exception as e:
+        st.error(f"Could not render metrics chart: {str(e)}")
+        return None
 
 def get_smell_evidence(smell: str, metrics: dict, basic_metrics: dict) -> str:
     """Generate evidence-based reasoning for code smells."""
@@ -1632,12 +1619,13 @@ def render_detection_tab():
                         with st.expander("📊 Metric Visualization", expanded=True):
                             try:
                                 chart = render_metrics_chart(advanced_metrics)
-                                if hasattr(chart, 'show'):
-                                    # It's a plotly figure
-                                    st.plotly_chart(chart, use_container_width=True)
+                                if chart is not None:
+                                    if hasattr(chart, 'show'):
+                                        st.plotly_chart(chart, use_container_width=True)
+                                    else:
+                                        st.bar_chart(chart.set_index('Metric')[['Value', 'Threshold']])
                                 else:
-                                    # It's a pandas DataFrame
-                                    st.bar_chart(chart.set_index('Metric')[['Value', 'Threshold']])
+                                    st.info("No metrics available for visualization.")
                             except Exception as e:
                                 st.error(f"Could not render metrics chart: {str(e)}")
                         
@@ -1766,17 +1754,76 @@ def render_refactoring_tab():
             basic_metrics = calculate_basic_metrics(st.session_state.original_code)
             advanced_metrics = calculate_advanced_metrics(st.session_state.original_code, basic_metrics)
             
-            # Display metrics
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Lines of Code", basic_metrics["loc"])
-                st.metric("Methods", basic_metrics["total_methods"])
-            with col2:
-                st.metric("Complexity", advanced_metrics["cc"]["value"])
-                st.metric("Coupling", advanced_metrics["cbo"]["value"])
-            with col3:
-                st.metric("Cohesion", advanced_metrics["lcom"]["value"])
-                st.metric("Inheritance", advanced_metrics["dit"]["value"])
+            # --- Professional Advanced Metrics Display (copied from Smell Detection tab) ---
+            st.markdown("##### Advanced Metrics")
+            metric_categories = {
+                "Complexity Metrics": ["cc", "lcom", "cbo", "dit"],
+                "Size Metrics": ["loc", "loc_per_method", "max_method_length"],
+                "Structure Metrics": ["num_methods", "num_fields", "num_public_methods", "num_public_fields"],
+                "Documentation Metrics": ["comment_density"]
+            }
+            for category, metric_keys in metric_categories.items():
+                st.markdown(f"###### {category}")
+                cols = st.columns(len(metric_keys))
+                for col, metric_key in zip(cols, metric_keys):
+                    metric_data = advanced_metrics.get(metric_key)
+
+                    display_value = "-"
+                    display_label = metric_key.replace('_', ' ').title()
+                    display_icon = ""
+                    display_status = "UNKNOWN"
+                    status_class = "low"  # Default CSS class for status
+
+                    if isinstance(metric_data, dict):
+                        display_value = metric_data.get('value', '-')
+                        display_icon = metric_data.get('icon', '')
+                        raw_status = metric_data.get('status', 'unknown').lower()
+                        if raw_status in ["high", "medium", "low"]:
+                            status_class = raw_status
+                            display_status = raw_status.upper()
+                        elif display_value != '-':
+                            display_status = "INFO"
+                            status_class = "low"
+                        else:
+                            display_status = "N/A"
+                            status_class = "low"
+                    elif isinstance(metric_data, (int, float, str)):
+                        display_value = metric_data
+                        display_status = "VALUE"
+                        status_class = "low"
+                    elif metric_data is None:
+                        display_value = "N/A"
+                        display_status = "MISSING"
+                        status_class = "medium"
+
+                    if not isinstance(display_value, str):
+                        display_value = str(display_value)
+
+                    with col:
+                        st.markdown(f"""
+                        <div class="metric-card">
+                            <div class="metric-value">{display_value}</div>
+                            <div class="metric-label">{display_icon} {display_label}</div>
+                            <div class="metric-status status-{status_class}">
+                                {display_status}
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+            # --- End Advanced Metrics Display ---
+            
+            # Add metrics visualization
+            with st.expander("📊 Metric Visualization", expanded=True):
+                try:
+                    chart = render_metrics_chart(advanced_metrics)
+                    if chart is not None:
+                        if hasattr(chart, 'show'):
+                            st.plotly_chart(chart, use_container_width=True)
+                        else:
+                            st.bar_chart(chart.set_index('Metric')[['Value', 'Threshold']])
+                    else:
+                        st.info("No metrics available for visualization.")
+                except Exception as e:
+                    st.error(f"Could not render metrics chart: {str(e)}")
             
             # Code smells detection
             st.markdown("### 🚨 Detected Code Smells")
@@ -2120,6 +2167,7 @@ def analyze_code_smells(content: str) -> dict:
     """Analyze code and return a dictionary of detected code smells with details."""
     smells = {}
     metrics = calculate_basic_metrics(content)
+    adv_metrics = calculate_advanced_metrics(content, metrics)
     # God Class: Large LOC and many methods
     if metrics["loc"] > 200 and metrics["total_methods"] > 10:
         smells["God Class"] = {
@@ -2158,6 +2206,57 @@ def analyze_code_smells(content: str) -> dict:
             "location": "Class",
             "description": "Class has high cyclomatic complexity.",
             "suggestion": "Simplify logic or split class."
+        }
+    # Long Parameter List
+    long_params = re.findall(r'\(([^)]{40,})\)', content)
+    if long_params:
+        smells["Long Parameter List"] = {
+            "location": "Methods",
+            "description": "Methods with too many parameters.",
+            "suggestion": "Refactor to use parameter objects."
+        }
+    # Duplicate Code (simple: repeated lines)
+    lines = [l.strip() for l in content.split('\n') if l.strip()]
+    if len(lines) != len(set(lines)):
+        smells["Duplicate Code"] = {
+            "location": "Class/Methods",
+            "description": "Duplicate lines of code detected.",
+            "suggestion": "Refactor to remove duplication."
+        }
+    # Switch Statements
+    if re.search(r'switch\s*\(', content):
+        smells["Switch Statements"] = {
+            "location": "Methods",
+            "description": "Switch/case statements detected.",
+            "suggestion": "Consider polymorphism or strategy pattern."
+        }
+    # Too Many Fields
+    if adv_metrics["num_fields"]["value"] > 15:
+        smells["Too Many Fields"] = {
+            "location": "Class",
+            "description": "Class has too many fields/attributes.",
+            "suggestion": "Split class or reduce fields."
+        }
+    # Lazy Class
+    if metrics["loc"] < 50 and metrics["total_methods"] < 3:
+        smells["Lazy Class"] = {
+            "location": "Class",
+            "description": "Class does too little.",
+            "suggestion": "Remove or merge with another class."
+        }
+    # Message Chains
+    if len(re.findall(r'\w+\.\w+\.\w+', content)) > 5:
+        smells["Message Chains"] = {
+            "location": "Methods",
+            "description": "Chained method calls detected.",
+            "suggestion": "Refactor to reduce message chains."
+        }
+    # Middle Man
+    if metrics["total_methods"] > 0 and adv_metrics["num_fields"]["value"] > 0 and metrics["total_methods"] / adv_metrics["num_fields"]["value"] < 0.5:
+        smells["Middle Man"] = {
+            "location": "Class",
+            "description": "Class delegates most of its work.",
+            "suggestion": "Remove unnecessary delegation."
         }
     return smells
 
