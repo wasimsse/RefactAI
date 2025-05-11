@@ -26,7 +26,9 @@ from refactoring.engine import RefactoringEngine
 from gptlab_integration import refactor_with_gptlab, render_refactoring_preview
 # --- Metrics utilities ---
 from metrics_utils import calculate_advanced_metrics, normalize_metrics, calculate_health_score
-from visualization_utils import render_metrics_chart
+from visualization_utils import render_metrics_chart, render_metric_category_chart, render_size_bar_chart
+from ui_components import render_health_score_gauge
+from refactoring_suggestions import get_refactoring_suggestion, render_quick_fix_button
 
 # Configure root logger
 logging.basicConfig(
@@ -1432,6 +1434,8 @@ def render_detection_tab():
                                     </div>
                                 </div>
                                 """, unsafe_allow_html=True)
+                                st.markdown(f"**Suggestion:** {get_refactoring_suggestion(smell)}")
+                                render_quick_fix_button(smell)
                         else:
                             st.success("✅ No code smells detected in this file")
                         
@@ -1634,14 +1638,17 @@ def render_refactoring_tab():
             # Add metrics visualization
             with st.expander("📊 Metric Visualization", expanded=True):
                 try:
-                    chart = render_metrics_chart(advanced_metrics)
-                    if chart is not None:
-                        if hasattr(chart, 'show'):
-                            st.plotly_chart(chart, use_container_width=True)
-                        else:
-                            st.bar_chart(chart.set_index('Metric')[['Value', 'Threshold']])
-                    else:
-                        st.info("No metrics available for visualization.")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown('#### Complexity Metrics')
+                        render_metric_category_chart(advanced_metrics, 'Complexity', ["lcom", "cbo", "dit", "cc", "rfc"])
+                        st.markdown('#### Structure Metrics')
+                        render_metric_category_chart(advanced_metrics, 'Structure', ["num_methods", "num_fields", "num_public_methods", "num_public_fields"])
+                    with col2:
+                        st.markdown('#### Size Metrics')
+                        render_metric_category_chart(advanced_metrics, 'Size', ["loc", "loc_per_method", "max_method_length"])
+                        st.markdown('#### Documentation Metrics')
+                        render_metric_category_chart(advanced_metrics, 'Documentation', ["comment_density"])
                 except Exception as e:
                     st.error(f"Could not render metrics chart: {str(e)}")
             
