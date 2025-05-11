@@ -29,6 +29,7 @@ from metrics_utils import calculate_advanced_metrics, normalize_metrics, calcula
 from visualization_utils import render_metrics_chart, render_metric_category_chart, render_size_bar_chart
 from ui_components import render_health_score_gauge
 from refactoring_suggestions import get_refactoring_suggestion, render_quick_fix_button
+from refactoring_patterns import render_pattern_selection_ui
 
 # Configure root logger
 logging.basicConfig(
@@ -1681,50 +1682,12 @@ def render_refactoring_tab():
     elif current_step == 3:
         st.markdown("### 🎯 Choose Refactoring Patterns")
         st.caption("Select the refactoring patterns to apply based on the analysis.")
-        
-        # Refactoring patterns with descriptions
-        refactoring_patterns = {
-            "Extract Method": {
-                "description": "Split long methods into smaller, focused ones",
-                "icon": "🔧",
-                "applicable": "Long Method" in [s for s in st.session_state.detected_smells.keys()]
-            },
-            "Extract Class": {
-                "description": "Move related fields and methods to a new class",
-                "icon": "📦",
-                "applicable": "God Class" in [s for s in st.session_state.detected_smells.keys()]
-            },
-            "Move Method": {
-                "description": "Move method to a more appropriate class",
-                "icon": "↗️",
-                "applicable": "Feature Envy" in [s for s in st.session_state.detected_smells.keys()]
-            },
-            "Encapsulate Field": {
-                "description": "Make fields private and provide accessors",
-                "icon": "🔒",
-                "applicable": "Data Class" in [s for s in st.session_state.detected_smells.keys()]
-            },
-            "Replace Conditional with Polymorphism": {
-                "description": "Use inheritance instead of conditionals",
-                "icon": "🔄",
-                "applicable": "Complex Class" in [s for s in st.session_state.detected_smells.keys()]
-            }
-        }
-        
-        # Display patterns in a grid
-        cols = st.columns(2)
-        selected_patterns = []
-        
-        for i, (pattern, info) in enumerate(refactoring_patterns.items()):
-            with cols[i % 2]:
-                if st.checkbox(
-                    f"{info['icon']} {pattern}",
-                    help=info["description"],
-                    disabled=not info["applicable"],
-                    key=f"pattern_{pattern}"
-                ):
-                    selected_patterns.append(pattern)
-        
+        detected_smells = st.session_state.detected_smells
+        # Use the new modular UI
+        selected_patterns, user_instructions, detect_more_smells = render_pattern_selection_ui(
+            detected_smells, 
+            st.session_state.get('user_instructions', "")
+        )
         # Navigation buttons
         col1, col2 = st.columns(2)
         with col1:
@@ -1735,6 +1698,8 @@ def render_refactoring_tab():
             if st.button("Next: Preview Changes →", use_container_width=True):
                 st.session_state.refactoring_step = 4
                 st.session_state.selected_patterns = selected_patterns
+                st.session_state.user_instructions = user_instructions
+                st.session_state.detect_more_smells = detect_more_smells
                 st.rerun()
 
     # Step 4: Preview Changes
@@ -1762,10 +1727,23 @@ def render_refactoring_tab():
             st.session_state['last_refactored_model'] = selected_model
             # Generate refactored code
             with st.spinner("Generating refactored code..."):
+                # Add instruction for additional smell detection if requested
+                additional_instructions = ""
+                if st.session_state.get('detect_more_smells', False):
+                    additional_instructions = """
+                    Please analyze the code for additional code smells beyond the automated detection.
+                    Consider:
+                    1. Design patterns that could be applied
+                    2. Potential performance improvements
+                    3. Security considerations
+                    4. Best practices violations
+                    """
+                
                 refactored_code, metadata = generate_refactoring(
                     st.session_state.original_code,
                     st.session_state.selected_patterns,
-                    st.session_state.detected_smells
+                    st.session_state.detected_smells,
+                    st.session_state.user_instructions + "\n" + additional_instructions
                 )
                 st.session_state.refactored_code = refactored_code
                 st.session_state.refactoring_metadata = metadata
@@ -1823,6 +1801,7 @@ def render_refactoring_tab():
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "file": st.session_state.selected_file["path"],
                     "patterns": st.session_state.selected_patterns,
+                    "instructions": st.session_state.user_instructions,
                     "before_metrics": calculate_basic_metrics(st.session_state.original_code),
                     "after_metrics": calculate_basic_metrics(st.session_state.refactored_code)
                 })
@@ -2087,7 +2066,7 @@ def analyze_code_smells(content: str) -> dict:
         }
     return smells
 
-def generate_refactoring(original_code, selected_patterns, detected_smells):
+def generate_refactoring(original_code, selected_patterns, detected_smells, user_instructions):
     """
     Generate refactored code using GPT-Lab or local LLM.
     Returns (refactored_code, metadata).
@@ -2095,7 +2074,7 @@ def generate_refactoring(original_code, selected_patterns, detected_smells):
     if not selected_patterns:
         return original_code, {"success": False, "reason": "No patterns selected."}
     # Prepare additional instructions
-    instructions = f"Apply the following refactoring patterns: {', '.join(selected_patterns)}."
+    instructions = f"Apply the following refactoring patterns: {', '.join(selected_patterns)}. {user_instructions}"
     # Use detected smells as context
     try:
         st.info(f"Prompt being sent to LLM:\n{instructions}")
