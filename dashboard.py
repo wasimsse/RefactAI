@@ -24,6 +24,9 @@ import pandas as pd
 from gptlab_test import gptlab_chat, MODEL_OPTIONS  # Import what we need from gptlab_test
 from refactoring.engine import RefactoringEngine
 from gptlab_integration import refactor_with_gptlab, render_refactoring_preview
+# --- Metrics utilities ---
+from metrics_utils import calculate_advanced_metrics, normalize_metrics, calculate_health_score
+from visualization_utils import render_metrics_chart
 
 # Configure root logger
 logging.basicConfig(
@@ -1072,65 +1075,6 @@ def analyze_project_classes():
             except Exception:
                 continue
 
-def calculate_advanced_metrics(content: str, basic_metrics: dict) -> dict:
-    try:
-        # Old metrics (for UI compatibility)
-        method_count = basic_metrics.get("total_methods", 0)
-        lcom = min(0.1 * method_count, 1.0) if method_count > 0 else 0
-        cbo = len(re.findall(r'import\s+[\w.]+;', content)) + len(re.findall(r'new\s+\w+\(', content))
-        inheritance_chain = re.findall(r'extends\s+\w+', content)
-        dit = len(inheritance_chain)
-        cc = len(re.findall(r'\b(if|for|while|case|catch)\b', content))
-        rfc = len(re.findall(r'(\w+\s+\w+\s*\([^)]*\)\s*{|\w+\.[a-zA-Z_]\w*\s*\([^)]*\))', content))
-
-        metrics = {
-            "lcom": {"value": round(lcom, 2), "threshold": 0.7, "status": "high" if lcom > 0.7 else "medium" if lcom > 0.4 else "low", "icon": "🧩", "help": "Lack of Cohesion of Methods (0-1). Lower is better."},
-            "cbo": {"value": cbo, "threshold": 5, "status": "high" if cbo > 5 else "medium" if cbo > 3 else "low", "icon": "🔗", "help": "Coupling Between Objects. Lower is better."},
-            "dit": {"value": dit, "threshold": 3, "status": "high" if dit > 3 else "medium" if dit > 2 else "low", "icon": "📐", "help": "Depth of Inheritance Tree. Lower is better."},
-            "cc": {"value": cc, "threshold": 10, "status": "high" if cc > 10 else "medium" if cc > 7 else "low", "icon": "🔄", "help": "Cyclomatic Complexity. Lower is better."},
-            "rfc": {"value": rfc, "threshold": 20, "status": "high" if rfc > 20 else "medium" if rfc > 15 else "low", "icon": "📡", "help": "Response For Class (methods + calls). Lower is better."}
-        }
-
-        # New metrics
-        num_fields = len(re.findall(r'(public|private|protected)?\s+\w+\s+\w+\s*(=|;)', content))
-        method_bodies = re.findall(r'(public|private|protected)?\s+(static\s+)?(\w+)\s+(\w+)\s*\([^)]*\)\s*{([\s\S]*?)}', content)
-        method_lengths = [len(m[4].split('\n')) for m in method_bodies if m[4].strip()]
-        avg_method_length = round(sum(method_lengths) / len(method_lengths), 2) if method_lengths else 0
-        max_method_length = max(method_lengths) if method_lengths else 0
-        total_lines = len(content.split('\n'))
-        comment_lines = len([l for l in content.split('\n') if l.strip().startswith('//') or l.strip().startswith('/*') or l.strip().startswith('*')])
-        comment_density = round((comment_lines / total_lines) * 100, 1) if total_lines > 0 else 0
-        num_classes = len(re.findall(r'\\bclass\\b', content))
-        num_interfaces = len(re.findall(r'\\binterface\\b', content))
-        num_enums = len(re.findall(r'\\benum\\b', content))
-
-        metrics.update({
-            "num_fields": {"value": num_fields, "status": "low", "icon": "🔢"},
-            "loc_per_method": {"value": avg_method_length, "status": "low", "icon": "📏"},
-            "max_method_length": {"value": max_method_length, "status": "low", "icon": "📏"},
-            "comment_density": {"value": comment_density, "status": "low", "icon": "💬"},
-            "num_methods": {"value": basic_metrics.get("total_methods", 0), "status": "low", "icon": "🔧"},
-            "num_public_methods": {"value": 0, "status": "low", "icon": "🔓"},  # Placeholder
-            "num_public_fields": {"value": 0, "status": "low", "icon": "🔓"},   # Placeholder
-        })
-        return metrics
-    except Exception as e:
-        st.error(f"Error calculating advanced metrics: {str(e)}")
-        return {
-            "lcom": {"value": 0, "threshold": 0.7, "status": "low", "icon": "🧩", "help": "Calculation error"},
-            "cbo": {"value": 0, "threshold": 5, "status": "low", "icon": "🔗", "help": "Calculation error"},
-            "dit": {"value": 0, "threshold": 3, "status": "low", "icon": "📐", "help": "Calculation error"},
-            "cc": {"value": 0, "threshold": 10, "status": "low", "icon": "🔄", "help": "Calculation error"},
-            "rfc": {"value": 0, "threshold": 20, "status": "low", "icon": "📡", "help": "Calculation error"},
-            "num_fields": {"value": 0, "status": "low", "icon": "🔢"},
-            "loc_per_method": {"value": 0, "status": "low", "icon": "📏"},
-            "max_method_length": {"value": 0, "status": "low", "icon": "📏"},
-            "comment_density": {"value": 0, "status": "low", "icon": "💬"},
-            "num_methods": {"value": 0, "status": "low", "icon": "🔧"},
-            "num_public_methods": {"value": 0, "status": "low", "icon": "🔓"},
-            "num_public_fields": {"value": 0, "status": "low", "icon": "🔓"},
-        }
-
 def render_metric_card(label: str, metric: dict, help_text: str = "") -> None:
     status_colors = {
         "low": ("#28a745", "✅"),
@@ -1155,130 +1099,6 @@ def render_metric_card(label: str, metric: dict, help_text: str = "") -> None:
 def format_metric_evidence(metric_name: str, value: float, threshold: float, comparison: str = ">") -> str:
     """Format metric evidence with value and threshold."""
     return f"{metric_name} = {value:.2f} {comparison} {threshold:.2f} threshold"
-
-def normalize_metrics(metrics: dict) -> dict:
-    """Normalize metrics to 0-1 scale for visualization."""
-    max_values = {
-        "lcom": 1.0,
-        "cbo": 10.0,
-        "dit": 5.0,
-        "cc": 15.0,
-        "rfc": 30.0
-    }
-    return {
-        k: min(v["value"] / max_values[k], 1.0)
-        for k, v in metrics.items()
-    }
-
-def render_metrics_chart(metrics: dict):
-    """Render a bar or radar chart for metrics visualization."""
-    try:
-        import plotly.graph_objects as go
-
-        # Only use metrics that are in max_values
-        max_values = {
-            "lcom": 1.0,
-            "cbo": 10.0,
-            "dit": 5.0,
-            "cc": 15.0,
-            "rfc": 30.0
-        }
-        filtered_metrics = {k: v for k, v in metrics.items() if k in max_values}
-        if not filtered_metrics:
-            st.warning("No complexity metrics available for chart.")
-            return None
-
-        norm_metrics = {k: min(v["value"] / max_values[k], 1.0) for k, v in filtered_metrics.items()}
-        categories = list(norm_metrics.keys())
-        values = list(norm_metrics.values())
-        thresholds = [filtered_metrics[k]["threshold"] / max_values[k] for k in categories]
-
-        fig = go.Figure()
-        fig.add_trace(go.Scatterpolar(
-            r=values,
-            theta=categories,
-            fill='toself',
-            name='Current Values'
-        ))
-        fig.add_trace(go.Scatterpolar(
-            r=thresholds,
-            theta=categories,
-            fill='toself',
-            name='Thresholds',
-            fillcolor='rgba(255, 0, 0, 0.2)',
-            line=dict(color='red', dash='dot')
-        ))
-        fig.update_layout(
-            polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
-            showlegend=True,
-            title="Complexity Metrics Overview (Normalized)",
-            height=400
-        )
-        return fig
-    except ImportError:
-        import pandas as pd
-        # Only use supported metrics for the bar chart as well
-        max_values = {
-            "lcom": 1.0,
-            "cbo": 10.0,
-            "dit": 5.0,
-            "cc": 15.0,
-            "rfc": 30.0
-        }
-        filtered_metrics = {k: v for k, v in metrics.items() if k in max_values}
-        if not filtered_metrics:
-            st.warning("No complexity metrics available for chart.")
-            return None
-        chart_data = pd.DataFrame({
-            'Metric': list(filtered_metrics.keys()),
-            'Value': [m["value"] for m in filtered_metrics.values()],
-            'Threshold': [m["threshold"] for m in filtered_metrics.values()]
-        })
-        return chart_data
-    except Exception as e:
-        st.error(f"Could not render metrics chart: {str(e)}")
-        return None
-
-def get_smell_evidence(smell: str, metrics: dict, basic_metrics: dict) -> str:
-    """Generate evidence-based reasoning for code smells."""
-    evidence = []
-    
-    if smell == "God Class":
-        wmc = basic_metrics.get("wmc", 0)
-        lcom = metrics["lcom"]["value"]
-        loc = basic_metrics.get("loc", 0)
-        evidence.extend([
-            f"High complexity (WMC = {wmc} > {basic_metrics.get('wmc_threshold', 20)})",
-            f"Low cohesion (LCOM = {lcom:.2f} > {metrics['lcom']['threshold']})",
-            f"Large size (LOC = {loc} > {basic_metrics.get('loc_threshold', 200)})"
-        ])
-    
-    elif smell == "Lazy Class":
-        wmc = basic_metrics.get("wmc", 0)
-        methods = basic_metrics.get("total_methods", 0)
-        loc = basic_metrics.get("loc", 0)
-        evidence.extend([
-            f"Low complexity (WMC = {wmc} < {basic_metrics.get('wmc_threshold', 20)})",
-            f"Few methods (Methods = {methods} < {basic_metrics.get('methods_threshold', 5)})",
-            f"Small size (LOC = {loc} < {basic_metrics.get('loc_threshold', 50)})"
-        ])
-    
-    elif smell == "Feature Envy":
-        cbo = metrics["cbo"]["value"]
-        rfc = metrics["rfc"]["value"]
-        evidence.extend([
-            f"High coupling (CBO = {cbo} > {metrics['cbo']['threshold']})",
-            f"Many external calls (RFC = {rfc} > {metrics['rfc']['threshold']})"
-        ])
-    
-    elif smell == "Data Class":
-        methods = basic_metrics.get("total_methods", 0)
-        getters_setters = basic_metrics.get("getters_setters", 0)
-        if methods > 0:
-            ratio = getters_setters / methods
-            evidence.append(f"High accessor ratio ({getters_setters}/{methods} = {ratio:.2f} > 0.7)")
-    
-    return "\n".join([f"• {e}" for e in evidence])
 
 def render_detection_tab():
     """Render the Smell Detection tab content."""
