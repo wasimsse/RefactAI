@@ -192,57 +192,227 @@ def is_refused_bequest(metrics: ClassMetrics) -> Tuple[bool, str]:
     
     return is_refused, reasoning
 
-def detect_smells(classes: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+def detect_smells(files: List[Dict[str, Any]]) -> Dict[str, Dict]:
     """
-    Detect code smells in Java classes.
+    Detect code smells in Java files.
     
     Args:
-        classes: List of dictionaries containing class information
+        files: List of dicts containing class_name, content, and inheritance_data
         
     Returns:
-        Dictionary mapping class names to detected smells and reasoning
+        Dict mapping class names to their smell analysis results
     """
     results = {}
     
-    for class_data in classes:
-        class_name = class_data["class_name"]
-        metrics = compute_metrics(class_data)
+    for file_info in files:
+        class_name = file_info["class_name"]
+        content = file_info["content"]
+        inheritance_data = file_info.get("inheritance_data", {})
         
-        # Initialize results for this class
+        # Initialize metrics
+        metrics = calculate_metrics(content, inheritance_data)
+        
+        # Detect smells based on metrics
+        smells = []
+        reasoning = {}
+        metrics_evidence = {}
+        
+        # Long Method Detection
+        long_methods = detect_long_methods(content)
+        if long_methods:
+            smells.append("Long Method")
+            reasoning["Long Method"] = "Contains methods that are too long and complex"
+            metrics_evidence["Long Method"] = format_method_evidence(long_methods)
+        
+        # God Class Detection
+        if is_god_class(metrics):
+            smells.append("God Class")
+            reasoning["God Class"] = "Class has too many responsibilities and low cohesion"
+            metrics_evidence["God Class"] = format_god_class_evidence(metrics)
+        
+        # Data Class Detection
+        if is_data_class(metrics):
+            smells.append("Data Class")
+            reasoning["Data Class"] = "Class only contains data and accessors"
+            metrics_evidence["Data Class"] = format_data_class_evidence(metrics)
+        
+        # Feature Envy Detection
+        if has_feature_envy(metrics, inheritance_data):
+            smells.append("Feature Envy")
+            reasoning["Feature Envy"] = "Methods use more features of other classes"
+            metrics_evidence["Feature Envy"] = format_feature_envy_evidence(metrics)
+        
+        # Store results
         results[class_name] = {
-            "smells": [],
-            "reasoning": {},
-            "metrics": {
-                "loc": metrics.loc,
-                "wmc": metrics.wmc,
-                "public_methods": metrics.public_methods,
-                "total_methods": metrics.total_methods,
-                "accessor_methods": metrics.accessor_methods
-            }
-        }
-        
-        # Check for each type of smell
-        smell_checks = [
-            ("God Class", is_god_class),
-            ("Data Class", is_data_class),
-            ("Lazy Class", is_lazy_class),
-            ("Feature Envy", is_feature_envy),
-            ("Refused Bequest", is_refused_bequest)
-        ]
-        
-        for smell_name, check_func in smell_checks:
-            is_smell, reasoning = check_func(metrics)
-            if is_smell:
-                results[class_name]["smells"].append(smell_name)
-                results[class_name]["reasoning"][smell_name] = reasoning
-        
-        # Add placeholder for future smell types
-        results[class_name]["future_smells"] = {
-            "Inappropriate Intimacy": "Not implemented - requires dependency analysis",
-            "Divergent Change": "Not implemented - requires version history analysis",
-            "Shotgun Surgery": "Not implemented - requires impact analysis",
-            "Speculative Generality": "Not implemented - requires usage analysis",
-            "Data Clumps": "Not implemented - requires field usage analysis"
+            "metrics": metrics,
+            "smells": smells,
+            "reasoning": reasoning,
+            "metrics_evidence": metrics_evidence
         }
     
-    return results 
+    return results
+
+def calculate_metrics(content: str, inheritance_data: Dict) -> Dict:
+    """Calculate code metrics for smell detection."""
+    metrics = {
+        "loc": len(content.splitlines()),
+        "methods": [],
+        "total_methods": 0,
+        "wmc": 0,  # Weighted Methods per Class
+        "getters_setters": 0,
+        "external_method_calls": 0,
+        "instance_variables": 0
+    }
+    
+    # Method detection
+    method_pattern = r'(?:public|private|protected)\s+\w+\s+(\w+)\s*\([^)]*\)\s*\{'
+    for match in re.finditer(method_pattern, content):
+        method_name = match.group(1)
+        method_start = match.start()
+        method_end = find_closing_brace(content, method_start)
+        method_content = content[method_start:method_end]
+        
+        # Calculate method metrics
+        method_metrics = {
+            "name": method_name,
+            "length": len(method_content.splitlines()),
+            "complexity": calculate_complexity(method_content)
+        }
+        metrics["methods"].append(method_metrics)
+        metrics["wmc"] += method_metrics["complexity"]
+    
+    metrics["total_methods"] = len(metrics["methods"])
+    
+    # Count getters and setters
+    getter_setter_pattern = r'(?:public|private|protected)\s+\w+\s+(get|set)\w+\s*\('
+    metrics["getters_setters"] = len(re.findall(getter_setter_pattern, content))
+    
+    # Count instance variables
+    instance_var_pattern = r'(?:private|protected)\s+\w+\s+\w+\s*;'
+    metrics["instance_variables"] = len(re.findall(instance_var_pattern, content))
+    
+    # Count external method calls
+    external_call_pattern = r'\w+\.\w+\('
+    metrics["external_method_calls"] = len(re.findall(external_call_pattern, content))
+    
+    return metrics
+
+def find_closing_brace(content: str, start_pos: int) -> int:
+    """Find the position of the closing brace that matches the opening brace."""
+    brace_count = 1
+    pos = content.find('{', start_pos) + 1
+    
+    while brace_count > 0 and pos < len(content):
+        if content[pos] == '{':
+            brace_count += 1
+        elif content[pos] == '}':
+            brace_count -= 1
+        pos += 1
+    
+    return pos
+
+def calculate_complexity(method_content: str) -> int:
+    """Calculate cyclomatic complexity of a method."""
+    complexity = 1  # Base complexity
+    
+    # Count control flow statements
+    control_patterns = [
+        r'\bif\b',
+        r'\belse\s+if\b',
+        r'\bfor\b',
+        r'\bwhile\b',
+        r'\bcase\b',
+        r'\bcatch\b'
+    ]
+    
+    for pattern in control_patterns:
+        complexity += len(re.findall(pattern, method_content))
+    
+    return complexity
+
+def detect_long_methods(content: str) -> List[Dict]:
+    """Detect long methods in the code."""
+    long_methods = []
+    method_pattern = r'(?:public|private|protected)\s+\w+\s+(\w+)\s*\([^)]*\)\s*\{'
+    
+    for match in re.finditer(method_pattern, content):
+        method_name = match.group(1)
+        method_start = match.start()
+        method_end = find_closing_brace(content, method_start)
+        method_content = content[method_start:method_end]
+        
+        lines = len(method_content.splitlines())
+        complexity = calculate_complexity(method_content)
+        
+        if lines > 30 or complexity > 10:
+            long_methods.append({
+                "name": method_name,
+                "lines": lines,
+                "complexity": complexity
+            })
+    
+    return long_methods
+
+def is_god_class(metrics: Dict) -> bool:
+    """Detect if a class is a God Class."""
+    return (
+        metrics["wmc"] > 47 or  # High complexity
+        metrics["total_methods"] > 15 or  # Too many methods
+        metrics["loc"] > 300  # Too many lines
+    )
+
+def is_data_class(metrics: Dict) -> bool:
+    """Detect if a class is a Data Class."""
+    if metrics["total_methods"] == 0:
+        return False
+    
+    getter_setter_ratio = metrics["getters_setters"] / metrics["total_methods"]
+    return (
+        getter_setter_ratio > 0.7 and  # Mostly getters and setters
+        metrics["instance_variables"] > 0  # Has instance variables
+    )
+
+def has_feature_envy(metrics: Dict, inheritance_data: Dict) -> bool:
+    """Detect Feature Envy smell."""
+    if metrics["total_methods"] == 0:
+        return False
+    
+    external_calls_ratio = metrics["external_method_calls"] / metrics["total_methods"]
+    return (
+        external_calls_ratio > 4 and  # Many external calls
+        inheritance_data.get("used_methods", 0) > inheritance_data.get("inherited_methods", 0)  # Uses more than inherits
+    )
+
+def format_method_evidence(long_methods: List[Dict]) -> str:
+    """Format evidence for long methods."""
+    evidence = []
+    for method in long_methods:
+        evidence.append(
+            f"Method '{method['name']}' has {method['lines']} lines "
+            f"and complexity of {method['complexity']}"
+        )
+    return "\n".join(evidence)
+
+def format_god_class_evidence(metrics: Dict) -> str:
+    """Format evidence for God Class detection."""
+    return (
+        f"WMC = {metrics['wmc']} (threshold: 47)\n"
+        f"Total Methods = {metrics['total_methods']} (threshold: 15)\n"
+        f"LOC = {metrics['loc']} (threshold: 300)"
+    )
+
+def format_data_class_evidence(metrics: Dict) -> str:
+    """Format evidence for Data Class detection."""
+    ratio = metrics["getters_setters"] / metrics["total_methods"] if metrics["total_methods"] > 0 else 0
+    return (
+        f"Getter/Setter Ratio = {ratio:.2f} (threshold: 0.7)\n"
+        f"Instance Variables = {metrics['instance_variables']}"
+    )
+
+def format_feature_envy_evidence(metrics: Dict) -> str:
+    """Format evidence for Feature Envy detection."""
+    ratio = metrics["external_method_calls"] / metrics["total_methods"] if metrics["total_methods"] > 0 else 0
+    return (
+        f"External Calls Ratio = {ratio:.2f} (threshold: 4.0)\n"
+        f"External Method Calls = {metrics['external_method_calls']}"
+    ) 

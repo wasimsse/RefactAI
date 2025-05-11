@@ -9,4 +9,6 @@ for future integration with more sophisticated static analysis tools.
 from .detector import detect_smells
 
 __version__ = "0.1.0"
-__author__ = "RefactAI Team" 
+__author__ = "RefactAI Team"
+
+__all__ = ['detect_smells'] 

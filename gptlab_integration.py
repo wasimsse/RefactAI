@@ -224,9 +224,10 @@ def generate_refactoring(original_code, selected_patterns, detected_smells):
         st.info(f"Calling LLM with model: {st.session_state.get('current_model', 'llama3.2')}")
         st.info(f"Patterns: {selected_patterns}")
         st.info(f"Detected smells: {detected_smells}")
+        model_to_use = st.session_state.get('selected_model', DEFAULT_MODELS.keys()[0])
         refactored_code = refactor_with_gptlab(
             code=original_code,
-            model_name=st.session_state.get('current_model', 'llama3.2'),
+            model_name=model_to_use,
             smell_analysis=detected_smells,
             additional_instructions=instructions,
             temperature=st.session_state.get('refactoring_sidebar_temperature', 0.3)
