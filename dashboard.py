@@ -1078,23 +1078,48 @@ def analyze_project_classes():
             except Exception:
                 continue
 
+# Mapping from metric keys to full names
+METRIC_FULL_NAMES = {
+    "cc": "Cyclomatic Complexity",
+    "lcom": "Lack of Cohesion of Methods (LCOM)",
+    "cbo": "Coupling Between Objects (CBO)",
+    "dit": "Depth of Inheritance Tree (DIT)",
+    "loc": "Lines of Code (LOC)",
+    "loc_per_method": "Lines of Code per Method",
+    "max_method_length": "Max Method Length",
+    "num_methods": "Number of Methods",
+    "num_fields": "Number of Fields",
+    "num_public_methods": "Number of Public Methods",
+    "num_public_fields": "Number of Public Fields",
+    "comment_density": "Comment Density"
+}
+
 def render_metric_card(label: str, metric: dict, help_text: str = "") -> None:
     status_colors = {
-        "low": ("#28a745", "✅"),
-        "medium": ("#ffc107", "⚠️"),
-        "high": ("#dc3545", "❌")
+        "low": ("#e6f9e6", "#28a745", "✅"),      # Green background, green text
+        "medium": ("#fffbe6", "#ffc107", "⚠️"),   # Yellow background, yellow text
+        "high": ("#ffe6e6", "#dc3545", "❌"),      # Red background, red text
+        "missing": ("#f8f9fa", "#6c757d", "ℹ️")   # Gray background, gray text
     }
-    color, icon = status_colors.get(metric["status"], ("#6c757d", "ℹ️"))
+    status = metric.get("status", "missing").lower()
+    bg_color, text_color, icon = status_colors.get(status, status_colors["missing"])
+    value = metric.get("value", "N/A")
+    if value in [None, "N/A"] or (isinstance(value, (int, float)) and value == 0):
+        value = "N/A"
+        status = "missing"
+        bg_color, text_color, icon = status_colors["missing"]
+    # Always use full name if available
+    full_label = METRIC_FULL_NAMES.get(label.lower(), label)
     st.markdown(f"""
-    <div class="metric-card" style="border-left: 4px solid {color}; padding: 1rem;">
-        <div style="color: #666; font-size: 0.9em;">{metric["icon"]} {label}
-            <span title="{help_text}" style="cursor: help; color: #888;"> ⓘ</span>
+    <div style="background:{bg_color};border-radius:0.5rem;padding:1rem;border:1px solid #e9ecef;">
+        <div style="color:#666;font-size:0.9em;">{icon} <b>{full_label}</b>
+            <span title="{help_text}" style="cursor:help;color:#888;"> ⓘ</span>
         </div>
-        <div style="font-size: 1.5em; font-weight: bold; color: {color};">
-            {metric["value"]} {icon}
+        <div style="font-size:1.5em;font-weight:bold;color:{text_color};">
+            {value}
         </div>
-        <div style="font-size: 0.8em; color: #666;">
-            Threshold: {metric.get("threshold", "-")}
+        <div style="font-size:0.8em;color:#666;">
+            Status: {status.upper()}
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -1412,27 +1437,39 @@ def render_detection_tab():
                                 font-size: 0.9rem;
                                 color: #666;
                             }
+                            .smell-severity {
+                                font-weight: bold;
+                                color: #dc3545;
+                                margin-bottom: 0.5rem;
+                            }
+                            .smell-example {
+                                background: #fff3cd;
+                                border-left: 4px solid #ffe082;
+                                padding: 0.5em;
+                                margin: 0.5em 0;
+                                font-family: monospace;
+                                font-size: 0.95em;
+                            }
                             </style>
                             """, unsafe_allow_html=True)
 
                             for smell in st.session_state.analysis_results["smells"]:
-                                smell_color = {
-                                    "God Class": ("🔴", "#dc3545", "High complexity and low cohesion"),
-                                    "Data Class": ("🟡", "#ffc107", "Lacks behavior"),
-                                    "Lazy Class": ("🟠", "#fd7e14", "Low responsibility"),
-                                    "Feature Envy": ("🟣", "#6f42c1", "High coupling"),
-                                    "Refused Bequest": ("🔵", "#0d6efd", "Inheritance misuse")
-                                }.get(smell, ("⚪", "#6c757d", ""))
-                                
+                                detail = st.session_state.analysis_results["reasoning"].get(smell, "")
+                                # Try to get new-style dict details from auto_smells
+                                if isinstance(detail, dict):
+                                    reason = detail.get("reason", "")
+                                    severity = detail.get("severity", "")
+                                    examples = detail.get("examples", [])
+                                else:
+                                    reason = detail
+                                    severity = ""
+                                    examples = []
                                 st.markdown(f"""
-                                <div class="smell-card" style="border-left: 4px solid {smell_color[1]}">
-                                    <div class="smell-title">{smell_color[0]} {smell}</div>
-                                    <div class="smell-reason">{st.session_state.analysis_results['reasoning'][smell]}</div>
-                                    <div class="smell-metrics">
-                                        <strong>Type:</strong> {smell_color[2]}<br>
-                                        <strong>Evidence:</strong><br>
-                                        {st.session_state.analysis_results.get('metrics_evidence', {}).get(smell, 'Detailed metrics analysis in progress...')}
-                                    </div>
+                                <div class="smell-card">
+                                    <div class="smell-title">{smell}</div>
+                                    {f'<div class="smell-severity">Severity: {severity}</div>' if severity else ''}
+                                    <div class="smell-reason">{reason}</div>
+                                    {''.join([f'<div class="smell-example">{ex}</div>' for ex in examples])}
                                 </div>
                                 """, unsafe_allow_html=True)
                                 st.markdown(f"**Suggestion:** {get_refactoring_suggestion(smell)}")
@@ -1591,49 +1628,9 @@ def render_refactoring_tab():
                 st.markdown(f"###### {category}")
                 cols = st.columns(len(metric_keys))
                 for col, metric_key in zip(cols, metric_keys):
-                    metric_data = advanced_metrics.get(metric_key)
-
-                    display_value = "-"
-                    display_label = metric_key.replace('_', ' ').title()
-                    display_icon = ""
-                    display_status = "UNKNOWN"
-                    status_class = "low"  # Default CSS class for status
-
-                    if isinstance(metric_data, dict):
-                        display_value = metric_data.get('value', '-')
-                        display_icon = metric_data.get('icon', '')
-                        raw_status = metric_data.get('status', 'unknown').lower()
-                        if raw_status in ["high", "medium", "low"]:
-                            status_class = raw_status
-                            display_status = raw_status.upper()
-                        elif display_value != '-':
-                            display_status = "INFO"
-                            status_class = "low"
-                        else:
-                            display_status = "N/A"
-                            status_class = "low"
-                    elif isinstance(metric_data, (int, float, str)):
-                        display_value = metric_data
-                        display_status = "VALUE"
-                        status_class = "low"
-                    elif metric_data is None:
-                        display_value = "N/A"
-                        display_status = "MISSING"
-                        status_class = "medium"
-
-                    if not isinstance(display_value, str):
-                        display_value = str(display_value)
-
+                    metric_data = advanced_metrics.get(metric_key, {})
                     with col:
-                        st.markdown(f"""
-                        <div class="metric-card">
-                            <div class="metric-value">{display_value}</div>
-                            <div class="metric-label">{display_icon} {display_label}</div>
-                            <div class="metric-status status-{status_class}">
-                                {display_status}
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
+                        render_metric_card(metric_key, metric_data, metric_data.get("help", ""))
             # --- End Advanced Metrics Display ---
             
             # Add metrics visualization

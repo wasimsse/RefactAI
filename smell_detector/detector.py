@@ -9,6 +9,7 @@ more sophisticated static analysis tools in the future.
 from typing import Dict, List, Any, Tuple, Set
 from dataclasses import dataclass
 import re
+from smell_detector.auto_smells import detect_auto_smells
 
 # Thresholds for various metrics
 THRESHOLDS = {
@@ -242,6 +243,35 @@ def detect_smells(files: List[Dict[str, Any]]) -> Dict[str, Dict]:
             reasoning["Feature Envy"] = "Methods use more features of other classes"
             metrics_evidence["Feature Envy"] = format_feature_envy_evidence(metrics)
         
+        # --- Integration: Automatically Detectable Code Smells ---
+        # Prepare method metrics for auto_smells
+        method_metrics = []
+        method_pattern = r'(?:public|private|protected)\s+\w+\s+(\w+)\s*\([^)]*\)\s*\{'
+        for match in re.finditer(method_pattern, content):
+            method_name = match.group(1)
+            method_start = match.start()
+            method_end = find_closing_brace(content, method_start)
+            method_content = content[method_start:method_end]
+            params = re.findall(r'\w+', content[match.start():content.find(')', match.start())])
+            method_metrics.append({
+                "name": method_name,
+                "lines": len(method_content.splitlines()),
+                "complexity": calculate_complexity(method_content),
+                "params": params
+            })
+        # Class names for uncommunicative name detection
+        class_names = [class_name]
+        auto_smells = detect_auto_smells(content, metrics, method_metrics, class_names)
+        for smell, detail in auto_smells.items():
+            if smell not in smells:
+                smells.append(smell)
+                reasoning[smell] = detail if isinstance(detail, str) else str(detail)
+        
+        # Magic Numbers Detection
+        if detect_magic_numbers(content):
+            smells.append("Magic Numbers")
+            reasoning["Magic Numbers"] = "Hardcoded numbers detected."
+        
         # Store results
         results[class_name] = {
             "metrics": metrics,
@@ -415,4 +445,7 @@ def format_feature_envy_evidence(metrics: Dict) -> str:
     return (
         f"External Calls Ratio = {ratio:.2f} (threshold: 4.0)\n"
         f"External Method Calls = {metrics['external_method_calls']}"
-    ) 
+    )
+
+def detect_magic_numbers(content: str) -> bool:
+    return bool(re.search(r'[^\\w]([0-9]{2,})[^\\w]', content)) 

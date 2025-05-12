@@ -47,4 +47,28 @@
 
 ---
 
+## Refactoring Pattern System: Enhancement Plan (for tomorrow)
+
+- [ ] **Pattern Recommendation Intelligence**
+    - [ ] Dynamic Pattern Ranking: Rank and highlight patterns based on severity, frequency, code metrics, and past user choices
+    - [ ] Pattern Impact Preview: Show a summary of what each pattern will change in the code
+- [ ] **Pattern-Driven LLM Prompting**
+    - [ ] Pattern-to-Prompt Mapping: Generate tailored prompt snippets for each selected pattern
+    - [ ] Pattern Combination Handling: Combine instructions for multiple patterns intelligently
+- [ ] **User Experience & UI**
+    - [ ] Pattern Details Modal: Click for before/after code, usage tips, and external links
+    - [ ] Pattern Search & Filter: Quickly find patterns by name, category, or effect
+- [ ] **Feedback Loop**
+    - [ ] User Feedback on Patterns: Let users rate usefulness and suggest improvements
+    - [ ] Pattern Effectiveness Tracking: Track which patterns lead to successful refactorings
+- [ ] **Extensibility**
+    - [ ] Pattern Plugin System: Allow adding new/custom patterns via config or plugin
+
+**Suggested Implementation Steps:**
+1. Refactor `refactoring_patterns.py` to add ranking, metadata, and prompt generation
+2. Update Pattern Selection UI with search/filter, modal, impact preview, and ranking
+3. Integrate Pattern-to-Prompt logic in the LLM refactoring step
+4. Add Feedback UI (optional)
+5. Document extensibility in README or config example
+
 **This file is the single source of truth for the professional refactoring workflow plan. All improvements and discussions should reference and update this document as the project evolves.**

@@ -27,6 +27,7 @@ def calculate_advanced_metrics(content: str, basic_metrics: dict) -> dict:
         comment_density = round((comment_lines / total_lines) * 100, 1) if total_lines > 0 else 0
         metrics.update({
             "num_fields": {"value": num_fields, "status": "low", "icon": "🔢"},
+            "loc": {"value": basic_metrics.get("loc", total_lines), "status": "low", "icon": "📏"},
             "loc_per_method": {"value": avg_method_length, "status": "low", "icon": "📏"},
             "max_method_length": {"value": max_method_length, "status": "low", "icon": "📏"},
             "comment_density": {"value": comment_density, "status": "low", "icon": "💬"},
@@ -44,6 +45,7 @@ def calculate_advanced_metrics(content: str, basic_metrics: dict) -> dict:
             "cc": {"value": 0, "threshold": 10, "status": "low", "icon": "🔄", "help": "Calculation error"},
             "rfc": {"value": 0, "threshold": 20, "status": "low", "icon": "📡", "help": "Calculation error"},
             "num_fields": {"value": 0, "status": "low", "icon": "🔢"},
+            "loc": {"value": 0, "status": "low", "icon": "📏"},
             "loc_per_method": {"value": 0, "status": "low", "icon": "📏"},
             "max_method_length": {"value": 0, "status": "low", "icon": "📏"},
             "comment_density": {"value": 0, "status": "low", "icon": "💬"},

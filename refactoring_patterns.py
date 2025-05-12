@@ -278,5 +278,29 @@ def render_pattern_selection_ui(detected_smells: List[str], user_instructions_de
             
             if cb and enabled:
                 selected_patterns.append(pattern)
+            elif cb and not enabled:
+                st.warning(f"⚠️ {pattern} is not recommended for the detected smells. Proceed with caution.")
     
     return selected_patterns, user_instructions, detect_more_smells 
+
+def validate_refactoring_impact(refactored_code: str, original_code: str, project_files: List[str]) -> bool:
+    """
+    Validate that refactoring changes are applied consistently across the entire codebase.
+    Returns True if the refactoring is consistent, False otherwise.
+    """
+    # Check if the refactored code is applied in the original file
+    if refactored_code not in original_code:
+        return False
+
+    # Check if the refactored code is applied in other files
+    for file_path in project_files:
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                file_content = f.read()
+                if refactored_code in file_content:
+                    return True
+        except Exception as e:
+            st.error(f"Error reading file {file_path}: {str(e)}")
+            return False
+
+    return False 
