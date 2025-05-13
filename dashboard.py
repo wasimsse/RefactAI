@@ -26,13 +26,17 @@ from refactoring.engine import RefactoringEngine
 from gptlab_integration import refactor_with_gptlab, render_refactoring_preview
 # --- Metrics utilities ---
 from metrics_utils import calculate_advanced_metrics, normalize_metrics, calculate_health_score
-from visualization_utils import render_metrics_chart, render_metric_category_chart, render_size_bar_chart
+from visualization_utils import render_metrics_chart, render_metric_category_chart, render_size_bar_chart, animated_bar_chart, animated_radar_chart
 from ui_components import render_health_score_gauge
 from refactoring_suggestions import get_refactoring_suggestion, render_quick_fix_button
 from refactoring_patterns import render_pattern_selection_ui
 import javalang
 from smell_ast_utils import detect_long_methods_ast, detect_ast_smells
-
+import plotly.graph_objects as go
+from dependency_utils import find_java_dependencies
+from dependency_utils import dependency_bar_chart
+from dependency_utils import dependency_network_chart
+import networkx as nx
 # Configure root logger
 logging.basicConfig(
     level=logging.INFO,
@@ -1507,8 +1511,17 @@ def render_detection_tab():
             st.error(f"❌ Error reading file: {str(e)}")
             return
 
+    # Show in UI (at the bottom of the analysis tab)
+    dependencies = set()
+    if st.session_state.original_code:
+        dependencies = find_java_dependencies(st.session_state.original_code)
+    if dependencies:
+        st.info(f"This file depends on: {', '.join(sorted(dependencies))}")
+    else:
+        st.info("No external dependencies detected in this file.")
+
 def render_refactoring_tab():
-    """Render the Refactoring tab content with a professional workflow."""
+    dependencies = set()  # Always initialize at the top to avoid UnboundLocalError
     st.title("🛠️ Code Refactoring")
     
     # Initialize session state variables
@@ -1611,92 +1624,137 @@ def render_refactoring_tab():
 
     # Step 2: Code Analysis
     elif current_step == 2:
+        # Ensure a file is always selected
+        if not st.session_state.get('selected_file') and java_files:
+            st.session_state.selected_file = java_files[0]
         st.markdown("### 🔍 Code Analysis")
         st.caption("Analyzing code quality and identifying potential improvements.")
-        
         if not st.session_state.original_code:
             st.error("No code loaded. Please go back and select a file.")
             return
-        
+        # Set dependencies BEFORE the tab code
+        dependencies = set()
+        if st.session_state.original_code:
+            dependencies = find_java_dependencies(st.session_state.original_code)
         with st.spinner("Analyzing code..."):
             basic_metrics = calculate_basic_metrics(st.session_state.original_code)
             advanced_metrics = calculate_advanced_metrics(st.session_state.original_code, basic_metrics)
-            # --- Professional Advanced Metrics Display (copied from Smell Detection tab) ---
-            st.markdown("##### Advanced Metrics")
-            metric_categories = {
-                "Complexity Metrics": ["cc", "lcom", "cbo", "dit"],
-                "Size Metrics": ["loc", "loc_per_method", "max_method_length"],
-                "Structure Metrics": ["num_methods", "num_fields", "num_public_methods", "num_public_fields"],
-                "Documentation Metrics": ["comment_density"]
-            }
-            for category, metric_keys in metric_categories.items():
-                st.markdown(f"###### {category}")
-                cols = st.columns(len(metric_keys))
-                for col, metric_key in zip(cols, metric_keys):
-                    metric_data = advanced_metrics.get(metric_key, {})
-                    with col:
-                        render_metric_card(metric_key, metric_data, metric_data.get("help", ""))
-            # --- End Advanced Metrics Display ---
-            with st.expander("📊 Metric Visualization", expanded=True):
+
+            # --- Organize content into sub-tabs ---
+            analysis_tabs = st.tabs(["Advanced Metrics", "Charts", "Code Smells", "Dependencies"])
+
+            # --- Advanced Metrics Tab ---
+            with analysis_tabs[0]:
+                st.markdown("##### Advanced Metrics")
+                metric_categories = {
+                    "Complexity Metrics": ["cc", "lcom", "cbo", "dit"],
+                    "Size Metrics": ["loc", "loc_per_method", "max_method_length"],
+                    "Structure Metrics": ["num_methods", "num_fields", "num_public_methods", "num_public_fields"],
+                    "Documentation Metrics": ["comment_density"]
+                }
+                for category, metric_keys in metric_categories.items():
+                    st.markdown(f"###### {category}")
+                    cols = st.columns(len(metric_keys))
+                    for col, metric_key in zip(cols, metric_keys):
+                        metric_data = advanced_metrics.get(metric_key, {})
+                        with col:
+                            render_metric_card(metric_key, metric_data, metric_data.get("help", ""))
+
+            # --- Charts Tab ---
+            with analysis_tabs[1]:
+                st.markdown("##### Metric Visualization")
+                chart_categories = {
+                    "Complexity": ["lcom", "cbo", "dit", "cc", "rfc"],
+                    "Size": ["loc", "loc_per_method", "max_method_length"],
+                    "Structure": ["num_methods", "num_fields", "num_public_methods", "num_public_fields"],
+                    "Documentation": ["comment_density"]
+                }
+                chart_category = st.selectbox("Select Metric Category", list(chart_categories.keys()), key="chart_category_select")
+                animated = st.toggle("Animated", value=True, key="animated_chart_toggle")
                 try:
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.markdown('#### Complexity Metrics')
-                        render_metric_category_chart(advanced_metrics, 'Complexity', ["lcom", "cbo", "dit", "cc", "rfc"])
-                        st.markdown('#### Structure Metrics')
-                        render_metric_category_chart(advanced_metrics, 'Structure', ["num_methods", "num_fields", "num_public_methods", "num_public_fields"])
-                    with col2:
-                        st.markdown('#### Size Metrics')
-                        render_metric_category_chart(advanced_metrics, 'Size', ["loc", "loc_per_method", "max_method_length"])
-                        st.markdown('#### Documentation Metrics')
-                        render_metric_category_chart(advanced_metrics, 'Documentation', ["comment_density"])
+                    if animated:
+                        if chart_category == "Complexity":
+                            animated_radar_chart(advanced_metrics, chart_categories["Complexity"], title="Complexity Metrics (Animated)")
+                        else:
+                            animated_bar_chart(advanced_metrics, chart_category, chart_categories[chart_category])
+                    else:
+                        render_metric_category_chart(advanced_metrics, chart_category, chart_categories[chart_category])
                 except Exception as e:
                     st.error(f"Could not render metrics chart: {str(e)}")
-            # Code smells detection
-            st.markdown("### 🚨 Detected Code Smells")
-            detected_smells = analyze_code_smells(st.session_state.original_code)
-            st.session_state.detected_smells = detected_smells
-            if detected_smells:
-                # --- Enhanced UI: summary and grouped display ---
-                render_smell_summary(detected_smells)
-                # Group smells by severity
-                severity_order = ["Critical", "Major", "Minor", "Info"]
-                grouped = {sev: [] for sev in severity_order}
-                for smell, details in detected_smells.items():
-                    sev = details.get("severity", "Info")
-                    grouped.setdefault(sev, []).append((smell, details))
-                for sev in severity_order:
-                    smells = grouped.get(sev, [])
-                    if smells:
-                        st.markdown(f"#### {sev} Issues" if sev != "Info" else "#### Other Issues")
-                        for smell, details in smells:
-                            render_smell_card(smell, details)
-            else:
-                st.success("✅ No code smells detected!")
 
-            # --- AST-based code smell detection ---
-            st.markdown("### 🧬 AST-Based Detected Code Smells")
-            thresholds = {
-                'long_method': st.session_state.get("long_method_threshold", 40),
-                'god_class_loc': 200,
-                'god_class_methods': 10,
-                'data_class_accessor_ratio': 0.7,
-                'feature_envy': 10,
-            }
-            ast_smells = detect_ast_smells(st.session_state.original_code, thresholds)
-            if ast_smells:
-                for smell, details in ast_smells.items():
-                    render_smell_card(smell, {
-                        "description": details.get("description", ""),
-                        "location": details.get("location", ""),
-                        "suggestion": "See details above.",
-                        "severity": "Info",
-                        "metric_evidence": details.get("description", "")
-                    })
-            else:
-                st.info("No AST-based code smells detected.")
+            # --- Code Smells Tab ---
+            with analysis_tabs[2]:
+                st.markdown("### 🚨 Detected Code Smells")
+                detected_smells = analyze_code_smells(st.session_state.original_code)
+                st.session_state.detected_smells = detected_smells
+                if detected_smells:
+                    render_smell_summary(detected_smells)
+                    severity_order = ["Critical", "Major", "Minor", "Info"]
+                    grouped = {sev: [] for sev in severity_order}
+                    for smell, details in detected_smells.items():
+                        sev = details.get("severity", "Info")
+                        grouped.setdefault(sev, []).append((smell, details))
+                    for sev in severity_order:
+                        smells = grouped.get(sev, [])
+                        if smells:
+                            st.markdown(f"#### {sev} Issues" if sev != "Info" else "#### Other Issues")
+                            for smell, details in smells:
+                                render_smell_card(smell, details)
+                else:
+                    st.success("✅ No code smells detected!")
+            # --- Code Smells Tab ---
+            with analysis_tabs[3]:
+                st.markdown("### 📊 Dependency Visualization")
 
-            # Navigation buttons
+                # Show dependency warning above the chart if dependencies exist
+                if dependencies:
+                    st.warning(
+                        f"Refactoring this file may affect: {', '.join(sorted(dependencies))}. "
+                        "Please review dependencies before proceeding."
+                    )
+
+                chart_type = st.selectbox(
+                    "Select Dependency Chart Type",
+                    ["Network Graph", "Bar Chart", "Raw List"],
+                    key="dependency_chart_type"
+                )
+
+                # Interpretation hints
+                if chart_type == "Network Graph":
+                    st.info("**Network Graph:** Shows the selected file (red) and its direct dependencies (blue). Each arrow points from your file to a file/class it depends on. This helps you see the structure and potential ripple effects of changes.")
+                elif chart_type == "Bar Chart":
+                    st.info("**Bar Chart:** Lists all direct dependencies as bars. This is a simple way to see how many and which files/classes your file depends on.")
+                elif chart_type == "Raw List":
+                    st.info("**Raw List:** Shows a plain list of all direct dependencies for reference.")
+
+                selected_file = st.session_state.selected_file
+                if selected_file and dependencies:
+                    file_name = selected_file['name']
+                    if chart_type == "Network Graph":
+                        fig = dependency_network_chart(file_name, dependencies)
+                        st.plotly_chart(fig, use_container_width=True)
+                    elif chart_type == "Bar Chart":
+                        fig = dependency_bar_chart(dependencies)
+                        if fig:
+                            st.plotly_chart(fig, use_container_width=True)
+                        else:
+                            st.info("No dependencies to visualize.")
+                    elif chart_type == "Raw List":
+                        st.markdown("**Direct Dependencies:**")
+                        for dep in sorted(dependencies):
+                            st.markdown(f"- {dep}")
+                else:
+                    st.info("No file selected or no dependencies detected for this file.")
+
+            # --- Dependency Analysis ---
+            dependencies = find_java_dependencies(st.session_state.original_code)
+            st.session_state['current_dependencies'] = dependencies
+            if dependencies:
+                st.info(f"This file depends on: {', '.join(sorted(dependencies))}")
+            else:
+                st.info("No external dependencies detected in this file.")
+
+            # Navigation buttons (outside tabs)
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("← Back to File Selection", use_container_width=True):
@@ -2193,6 +2251,69 @@ def render_smell_summary(smells):
         f"Info: {counts['Info']}",
         unsafe_allow_html=True
     )
+
+def animated_bar_chart(metrics, category, keys):
+    values = [metrics[k]["value"] for k in keys]
+    fig = go.Figure(
+        data=[go.Bar(x=keys, y=[0]*len(keys), marker_color='indianred')],
+        layout=go.Layout(
+            title=f"{category} Metrics (Animated)",
+            yaxis=dict(range=[0, max(values)*1.2])
+        )
+    )
+    chart = st.plotly_chart(fig, use_container_width=True)
+    for i in range(1, 11):
+        y = [v * i / 10 for v in values]
+        fig.data[0].y = y
+        chart.plotly_chart(fig, use_container_width=True)
+        time.sleep(0.05)
+
+def animated_radar_chart(metrics, keys, title="Radar Chart"):
+    values = [metrics[k]["value"] for k in keys]
+    categories = keys + [keys[0]]
+    values = values + [values[0]]
+    fig = go.Figure()
+    radar = go.Scatterpolar(r=[0]*len(categories), theta=categories, fill='toself', name='Metrics')
+    fig.add_trace(radar)
+    fig.update_layout(
+        polar=dict(radialaxis=dict(visible=True, range=[0, max(values)*1.2])),
+        showlegend=False,
+        title=title
+    )
+    chart = st.plotly_chart(fig, use_container_width=True)
+    for i in range(1, 11):
+        r = [v * i / 10 for v in values]
+        fig.data[0].r = r
+        chart.plotly_chart(fig, use_container_width=True)
+        time.sleep(0.05)
+
+def dependency_network_chart(current_file, dependencies):
+    G = nx.DiGraph()
+    G.add_node(current_file)
+    for dep in dependencies:
+        G.add_node(dep)
+        G.add_edge(current_file, dep)
+    pos = nx.spring_layout(G)
+    edge_x, edge_y = [], []
+    for src, dst in G.edges():
+        x0, y0 = pos[src]
+        x1, y1 = pos[dst]
+        edge_x += [x0, x1, None]
+        edge_y += [y0, y1, None]
+    node_x, node_y, node_text = [], [], []
+    for node in G.nodes():
+        x, y = pos[node]
+        node_x.append(x)
+        node_y.append(y)
+        node_text.append(node)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=edge_x, y=edge_y, line=dict(width=1, color='#888'), mode='lines'))
+    fig.add_trace(go.Scatter(
+        x=node_x, y=node_y, mode='markers+text', text=node_text, textposition='top center',
+        marker=dict(size=20, color=['red' if n == current_file else 'skyblue' for n in G.nodes()])
+    ))
+    fig.update_layout(title="Dependency Network", showlegend=False, margin=dict(l=20, r=20, t=40, b=20))
+    return fig
 
 if __name__ == "__main__":
     main() 
