@@ -1,4 +1,6 @@
 import streamlit as st
+import plotly.graph_objects as go
+import time
 
 def render_metric_category_chart(metrics: dict, category: str, keys: list):
     """
@@ -23,7 +25,6 @@ def render_metric_category_chart(metrics: dict, category: str, keys: list):
 
 def render_complexity_radar_chart(metrics: dict, keys: list):
     try:
-        import plotly.graph_objects as go
         filtered_metrics = {k: v for k, v in metrics.items() if k in keys}
         if not filtered_metrics:
             st.warning("No complexity metrics available for chart.")
@@ -113,4 +114,39 @@ def render_metrics_chart(metrics: dict):
         metrics,
         category="Complexity",
         keys=["lcom", "cbo", "dit", "cc", "rfc"]
-    ) 
+    )
+
+def animated_bar_chart(metrics, category, keys):
+    values = [metrics[k]["value"] for k in keys]
+    fig = go.Figure(
+        data=[go.Bar(x=keys, y=[0]*len(keys), marker_color='indianred')],
+        layout=go.Layout(
+            title=f"{category} Metrics (Animated)",
+            yaxis=dict(range=[0, max(values)*1.2])
+        )
+    )
+    chart = st.plotly_chart(fig, use_container_width=True)
+    for i in range(1, 11):
+        y = [v * i / 10 for v in values]
+        fig.data[0].y = y
+        chart.plotly_chart(fig, use_container_width=True)
+        time.sleep(0.05)
+
+def animated_radar_chart(metrics, keys, title="Radar Chart"):
+    values = [metrics[k]["value"] for k in keys]
+    categories = keys + [keys[0]]
+    values = values + [values[0]]
+    fig = go.Figure()
+    radar = go.Scatterpolar(r=[0]*len(categories), theta=categories, fill='toself', name='Metrics')
+    fig.add_trace(radar)
+    fig.update_layout(
+        polar=dict(radialaxis=dict(visible=True, range=[0, max(values)*1.2])),
+        showlegend=False,
+        title=title
+    )
+    chart = st.plotly_chart(fig, use_container_width=True)
+    for i in range(1, 11):
+        r = [v * i / 10 for v in values]
+        fig.data[0].r = r
+        chart.plotly_chart(fig, use_container_width=True)
+        time.sleep(0.05) 
