@@ -445,7 +445,7 @@ def format_feature_envy_evidence(metrics: Dict) -> str:
     return (
         f"External Calls Ratio = {ratio:.2f} (threshold: 4.0)\n"
         f"External Method Calls = {metrics['external_method_calls']}"
-    )
+    ) 
 
 def detect_magic_numbers(content: str) -> bool:
     return bool(re.search(r'[^\\w]([0-9]{2,})[^\\w]', content)) 

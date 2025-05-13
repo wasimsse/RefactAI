@@ -30,6 +30,8 @@ from visualization_utils import render_metrics_chart, render_metric_category_cha
 from ui_components import render_health_score_gauge
 from refactoring_suggestions import get_refactoring_suggestion, render_quick_fix_button
 from refactoring_patterns import render_pattern_selection_ui
+import javalang
+from smell_ast_utils import detect_long_methods_ast, detect_ast_smells
 
 # Configure root logger
 logging.basicConfig(
@@ -785,6 +787,12 @@ def render_refactoring_sidebar():
     
     st.session_state['selected_smells'] = selected_smells
 
+    st.sidebar.header("Smell Detection Thresholds")
+    long_method_threshold = st.sidebar.number_input(
+        "Long Method (lines)", min_value=10, max_value=200, value=40, step=1, key="long_method_threshold"
+    )
+    # Add more thresholds as needed
+
 def render_home_tab():
     """Render the Home tab content."""
     st.title("🏠 Welcome to RefactAI")
@@ -1104,7 +1112,7 @@ def render_metric_card(label: str, metric: dict, help_text: str = "") -> None:
     status = metric.get("status", "missing").lower()
     bg_color, text_color, icon = status_colors.get(status, status_colors["missing"])
     value = metric.get("value", "N/A")
-    if value in [None, "N/A"] or (isinstance(value, (int, float)) and value == 0):
+    if value in [None, "N/A"]:
         value = "N/A"
         status = "missing"
         bg_color, text_color, icon = status_colors["missing"]
@@ -1610,12 +1618,9 @@ def render_refactoring_tab():
             st.error("No code loaded. Please go back and select a file.")
             return
         
-        # Run analysis
         with st.spinner("Analyzing code..."):
-            # Basic metrics
             basic_metrics = calculate_basic_metrics(st.session_state.original_code)
             advanced_metrics = calculate_advanced_metrics(st.session_state.original_code, basic_metrics)
-            
             # --- Professional Advanced Metrics Display (copied from Smell Detection tab) ---
             st.markdown("##### Advanced Metrics")
             metric_categories = {
@@ -1632,8 +1637,6 @@ def render_refactoring_tab():
                     with col:
                         render_metric_card(metric_key, metric_data, metric_data.get("help", ""))
             # --- End Advanced Metrics Display ---
-            
-            # Add metrics visualization
             with st.expander("📊 Metric Visualization", expanded=True):
                 try:
                     col1, col2 = st.columns(2)
@@ -1649,21 +1652,50 @@ def render_refactoring_tab():
                         render_metric_category_chart(advanced_metrics, 'Documentation', ["comment_density"])
                 except Exception as e:
                     st.error(f"Could not render metrics chart: {str(e)}")
-            
             # Code smells detection
             st.markdown("### 🚨 Detected Code Smells")
             detected_smells = analyze_code_smells(st.session_state.original_code)
             st.session_state.detected_smells = detected_smells
-            
             if detected_smells:
+                # --- Enhanced UI: summary and grouped display ---
+                render_smell_summary(detected_smells)
+                # Group smells by severity
+                severity_order = ["Critical", "Major", "Minor", "Info"]
+                grouped = {sev: [] for sev in severity_order}
                 for smell, details in detected_smells.items():
-                    with st.expander(f"⚠️ {smell}", expanded=True):
-                        st.markdown(f"**Location:** {details['location']}")
-                        st.markdown(f"**Description:** {details['description']}")
-                        st.markdown(f"**Suggestion:** {details['suggestion']}")
+                    sev = details.get("severity", "Info")
+                    grouped.setdefault(sev, []).append((smell, details))
+                for sev in severity_order:
+                    smells = grouped.get(sev, [])
+                    if smells:
+                        st.markdown(f"#### {sev} Issues" if sev != "Info" else "#### Other Issues")
+                        for smell, details in smells:
+                            render_smell_card(smell, details)
             else:
                 st.success("✅ No code smells detected!")
-            
+
+            # --- AST-based code smell detection ---
+            st.markdown("### 🧬 AST-Based Detected Code Smells")
+            thresholds = {
+                'long_method': st.session_state.get("long_method_threshold", 40),
+                'god_class_loc': 200,
+                'god_class_methods': 10,
+                'data_class_accessor_ratio': 0.7,
+                'feature_envy': 10,
+            }
+            ast_smells = detect_ast_smells(st.session_state.original_code, thresholds)
+            if ast_smells:
+                for smell, details in ast_smells.items():
+                    render_smell_card(smell, {
+                        "description": details.get("description", ""),
+                        "location": details.get("location", ""),
+                        "suggestion": "See details above.",
+                        "severity": "Info",
+                        "metric_evidence": details.get("description", "")
+                    })
+            else:
+                st.info("No AST-based code smells detected.")
+
             # Navigation buttons
             col1, col2 = st.columns(2)
             with col1:
@@ -1976,90 +2008,120 @@ def analyze_code_smells(content: str) -> dict:
         smells["God Class"] = {
             "location": "Class",
             "description": "Class is very large and does too much.",
-            "suggestion": "Consider splitting into smaller classes."
+            "suggestion": "Consider splitting into smaller classes.",
+            "severity": "Critical",
+            "metric_evidence": f"Lines of Code: {metrics['loc']} (threshold: 200), Methods: {metrics['total_methods']} (threshold: 10)"
         }
-    # Long Method: Any method with >40 lines
-    long_methods = re.findall(r'(public|private|protected)?\s+(static\s+)?(\w+)\s+(\w+)\s*\([^)]*\)\s*{([\s\S]*?)}', content)
+    # Long Method: AST-based detection
+    long_method_threshold = st.session_state.get("long_method_threshold", 40)
+    long_methods = detect_long_methods_ast(content, length_threshold=long_method_threshold)
     for m in long_methods:
-        method_body = m[4]
-        if len(method_body.split('\n')) > 40:
-            smells["Long Method"] = {
-                "location": f"Method: {m[3]}",
-                "description": "Method is too long.",
-                "suggestion": "Extract smaller methods."
-            }
-            break
+        smells[f"Long Method: {m['name']}"] = {
+            "location": m["location"],
+            "description": m["description"],
+            "suggestion": "Extract smaller methods.",
+            "severity": "Major",
+            "metric_evidence": f"Method length: {m['length']} (threshold: {m['threshold']})"
+        }
     # Data Class: Many getters/setters, few other methods
     if metrics["total_methods"] > 0 and metrics["getters_setters"] / metrics["total_methods"] > 0.7:
+        ratio = metrics["getters_setters"] / metrics["total_methods"]
         smells["Data Class"] = {
             "location": "Class",
             "description": "Class mainly contains data and accessors.",
-            "suggestion": "Add behavior or refactor responsibilities."
+            "suggestion": "Add behavior or refactor responsibilities.",
+            "severity": "Minor",
+            "metric_evidence": f"Accessor ratio: {ratio:.2f} (threshold: 0.7), Getters/Setters: {metrics['getters_setters']}, Total Methods: {metrics['total_methods']}"
         }
     # Feature Envy: Many external calls (very basic heuristic)
-    if len(re.findall(r'\w+\.\w+\(', content)) > 10:
+    ext_calls = len(re.findall(r'\w+\.\w+\(', content))
+    if ext_calls > 10:
         smells["Feature Envy"] = {
             "location": "Methods",
             "description": "Methods use many features of other classes.",
-            "suggestion": "Move methods to more appropriate classes."
+            "suggestion": "Move methods to more appropriate classes.",
+            "severity": "Info",
+            "metric_evidence": f"External method calls: {ext_calls} (threshold: 10)"
         }
     # Complex Class: Many branches
-    if len(re.findall(r'\b(if|for|while|case|catch)\b', content)) > 30:
+    branches = len(re.findall(r'\b(if|for|while|case|catch)\b', content))
+    if branches > 30:
         smells["Complex Class"] = {
             "location": "Class",
             "description": "Class has high cyclomatic complexity.",
-            "suggestion": "Simplify logic or split class."
+            "suggestion": "Simplify logic or split class.",
+            "severity": "Major",
+            "metric_evidence": f"Branching statements: {branches} (threshold: 30)"
         }
     # Long Parameter List
     long_params = re.findall(r'\(([^)]{40,})\)', content)
     if long_params:
+        param_count = max(len(p.split(',')) for p in long_params)
         smells["Long Parameter List"] = {
             "location": "Methods",
             "description": "Methods with too many parameters.",
-            "suggestion": "Refactor to use parameter objects."
+            "suggestion": "Refactor to use parameter objects.",
+            "severity": "Info",
+            "metric_evidence": f"Parameter count: {param_count} (threshold: 5+)"
         }
     # Duplicate Code (simple: repeated lines)
     lines = [l.strip() for l in content.split('\n') if l.strip()]
     if len(lines) != len(set(lines)):
+        dup_count = len(lines) - len(set(lines))
         smells["Duplicate Code"] = {
             "location": "Class/Methods",
             "description": "Duplicate lines of code detected.",
-            "suggestion": "Refactor to remove duplication."
+            "suggestion": "Refactor to remove duplication.",
+            "severity": "Info",
+            "metric_evidence": f"Duplicate lines: {dup_count}"
         }
     # Switch Statements
-    if re.search(r'switch\s*\(', content):
+    switch_count = len(re.findall(r'switch\s*\(', content))
+    if switch_count > 0:
         smells["Switch Statements"] = {
             "location": "Methods",
             "description": "Switch/case statements detected.",
-            "suggestion": "Consider polymorphism or strategy pattern."
+            "suggestion": "Consider polymorphism or strategy pattern.",
+            "severity": "Minor",
+            "metric_evidence": f"Switch statements: {switch_count} (threshold: >0)"
         }
     # Too Many Fields
     if adv_metrics["num_fields"]["value"] > 15:
         smells["Too Many Fields"] = {
             "location": "Class",
             "description": "Class has too many fields/attributes.",
-            "suggestion": "Split class or reduce fields."
+            "suggestion": "Split class or reduce fields.",
+            "severity": "Major",
+            "metric_evidence": f"Fields: {adv_metrics['num_fields']['value']} (threshold: 15)"
         }
     # Lazy Class
     if metrics["loc"] < 50 and metrics["total_methods"] < 3:
         smells["Lazy Class"] = {
             "location": "Class",
             "description": "Class does too little.",
-            "suggestion": "Remove or merge with another class."
+            "suggestion": "Remove or merge with another class.",
+            "severity": "Minor",
+            "metric_evidence": f"Lines of Code: {metrics['loc']} (threshold: <50), Methods: {metrics['total_methods']} (threshold: <3)"
         }
     # Message Chains
-    if len(re.findall(r'\w+\.\w+\.\w+', content)) > 5:
+    msg_chains = len(re.findall(r'\w+\.\w+\.\w+', content))
+    if msg_chains > 5:
         smells["Message Chains"] = {
             "location": "Methods",
             "description": "Chained method calls detected.",
-            "suggestion": "Refactor to reduce message chains."
+            "suggestion": "Refactor to reduce message chains.",
+            "severity": "Info",
+            "metric_evidence": f"Message chains: {msg_chains} (threshold: 5)"
         }
     # Middle Man
     if metrics["total_methods"] > 0 and adv_metrics["num_fields"]["value"] > 0 and metrics["total_methods"] / adv_metrics["num_fields"]["value"] < 0.5:
+        ratio = metrics["total_methods"] / adv_metrics["num_fields"]["value"]
         smells["Middle Man"] = {
             "location": "Class",
             "description": "Class delegates most of its work.",
-            "suggestion": "Remove unnecessary delegation."
+            "suggestion": "Remove unnecessary delegation.",
+            "severity": "Minor",
+            "metric_evidence": f"Method/Field ratio: {ratio:.2f} (threshold: <0.5), Methods: {metrics['total_methods']}, Fields: {adv_metrics['num_fields']['value']}"
         }
     return smells
 
@@ -2098,6 +2160,39 @@ GPTLAB_ENDPOINTS = {
     }
 }
 GPTLAB_BEARER_TOKEN = "sk-ollama-gptlab-6cc87c9bd38b24aca0fe77f0c9c4d68d"
+
+def render_smell_card(smell, details):
+    severity_colors = {
+        "Critical": "#ffe6e6",
+        "Major": "#fffbe6",
+        "Minor": "#e6f9e6",
+        "Info": "#f8f9fa"
+    }
+    color = severity_colors.get(details.get("severity", "Info"), "#f8f9fa")
+    with st.expander(f"[{details.get('severity', 'Info').upper()}] {smell} — {details.get('location', '')}", expanded=True):
+        st.markdown(f"""
+        <div style="background:{color};border-radius:0.5rem;padding:1rem;border:1px solid #e9ecef;">
+            <b>Description:</b> {details.get('description', '')}<br>
+            <b>Suggestion:</b> {details.get('suggestion', '')}<br>
+            <b>Metric:</b> {details.get('metric_evidence', '')}
+        </div>
+        """, unsafe_allow_html=True)
+        if details.get("evidence"):
+            st.code(details["evidence"], language="java")
+
+def render_smell_summary(smells):
+    counts = {"Critical": 0, "Major": 0, "Minor": 0, "Info": 0}
+    for s in smells.values():
+        sev = s.get("severity", "Info")
+        counts[sev] += 1
+    st.markdown(
+        f"**Detected Smells:** "
+        f"<span style='color:#dc3545'>Critical: {counts['Critical']}</span> | "
+        f"<span style='color:#ffc107'>Major: {counts['Major']}</span> | "
+        f"<span style='color:#28a745'>Minor: {counts['Minor']}</span> | "
+        f"Info: {counts['Info']}",
+        unsafe_allow_html=True
+    )
 
 if __name__ == "__main__":
     main() 

@@ -25,6 +25,14 @@ def calculate_advanced_metrics(content: str, basic_metrics: dict) -> dict:
         total_lines = len(content.split('\n'))
         comment_lines = len([l for l in content.split('\n') if l.strip().startswith('//') or l.strip().startswith('/*') or l.strip().startswith('*')])
         comment_density = round((comment_lines / total_lines) * 100, 1) if total_lines > 0 else 0
+
+        # Count public methods
+        public_method_pattern = r'public\s+(static\s+)?[\w<>\[\],\s]+\s+\w+\s*\([^)]*\)\s*\{'
+        num_public_methods = len(re.findall(public_method_pattern, content))
+        # Count public fields
+        public_field_pattern = r'public\s+(static\s+)?[\w<>\[\],\s]+\s+\w+\s*;'
+        num_public_fields = len(re.findall(public_field_pattern, content))
+
         metrics.update({
             "num_fields": {"value": num_fields, "status": "low", "icon": "🔢"},
             "loc": {"value": basic_metrics.get("loc", total_lines), "status": "low", "icon": "📏"},
@@ -32,8 +40,8 @@ def calculate_advanced_metrics(content: str, basic_metrics: dict) -> dict:
             "max_method_length": {"value": max_method_length, "status": "low", "icon": "📏"},
             "comment_density": {"value": comment_density, "status": "low", "icon": "💬"},
             "num_methods": {"value": basic_metrics.get("total_methods", 0), "status": "low", "icon": "🔧"},
-            "num_public_methods": {"value": 0, "status": "low", "icon": "🔓"},
-            "num_public_fields": {"value": 0, "status": "low", "icon": "🔓"},
+            "num_public_methods": {"value": num_public_methods, "status": "low", "icon": "🔓"},
+            "num_public_fields": {"value": num_public_fields, "status": "low", "icon": "🔓"},
         })
         return metrics
     except Exception as e:
