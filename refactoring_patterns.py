@@ -1,5 +1,6 @@
 import streamlit as st
 from typing import Dict, List, Set, Tuple
+from pattern_safety import get_pattern_safety
 
 # Pattern categories and their descriptions
 PATTERN_CATEGORIES = {
@@ -217,20 +218,23 @@ def get_enabled_patterns(detected_smells: List[str]) -> Set[str]:
             enabled.update(SMELL_TO_PATTERNS[smell]["patterns"])
     return enabled
 
-def render_pattern_selection_ui(detected_smells: List[str], user_instructions_default: str = "") -> Tuple[List[str], str, bool]:
+def render_pattern_selection_ui(detected_smells: List[str], user_instructions_default: str = "", dependencies: set = None, dependents: set = None) -> Tuple[List[str], str, bool]:
     """
     Render the pattern selection UI. Returns (selected_patterns, user_instructions, detect_more_smells).
-    Only patterns relevant to detected smells are enabled.
+    Only patterns relevant to detected smells are enabled. Now includes dependency-aware safety checks and improved UI/UX.
     """
     enabled_patterns = get_enabled_patterns(detected_smells)
-    
+    dependencies = dependencies or set()
+    dependents = dependents or set()
+
     # Add option to detect more smells
     st.markdown("#### 🔍 Additional Analysis")
     detect_more_smells = st.checkbox(
         "Request LLM to detect additional code smells",
-        help="Ask the LLM to analyze the code for additional smells beyond the automated detection"
+        help="Ask the LLM to analyze the code for additional smells beyond the automated detection",
+        key="detect_more_smells_checkbox_choose_patterns"
     )
-    
+
     # User instructions
     st.markdown("#### 📝 Special Instructions")
     user_instructions = st.text_area(
@@ -238,25 +242,56 @@ def render_pattern_selection_ui(detected_smells: List[str], user_instructions_de
         user_instructions_default,
         help="Provide additional context or requirements for the refactoring process"
     )
-    
+
+    # --- Pattern Search/Filter ---
+    st.markdown("#### 🔎 Filter Patterns")
+    pattern_search = st.text_input("Search by pattern name or category", "")
+    pattern_search_lower = pattern_search.lower().strip()
+
     # Pattern selection by category
     st.markdown("#### 🎯 Choose Refactoring Patterns")
     selected_patterns = []
-    
+
     for category, category_info in PATTERN_CATEGORIES.items():
+        # Filter by category if search is used
+        if pattern_search_lower and pattern_search_lower not in category.lower():
+            # Only skip if no patterns in this category match search
+            if not any(pattern_search_lower in name.lower() for name, info in ALL_PATTERNS.items() if info['category'] == category):
+                continue
         st.markdown(f"##### {category_info['icon']} {category}")
         st.caption(category_info['description'])
-        
+
         # Get patterns for this category
         category_patterns = {
             name: info for name, info in ALL_PATTERNS.items()
             if info['category'] == category
         }
-        
+
         for pattern, info in category_patterns.items():
+            # Filter by search
+            if pattern_search_lower and pattern_search_lower not in pattern.lower() and pattern_search_lower not in category.lower():
+                continue
             enabled = pattern in enabled_patterns
-            checked = enabled
-            
+            # Dependency-aware safety check
+            safety = get_pattern_safety(pattern, dependencies, dependents)
+            if safety == "safe":
+                indicator = "✅"
+                disabled = not enabled
+                warning = None
+            elif safety == "risky":
+                indicator = "⚠️"
+                disabled = False
+                warning = f"{pattern} may affect other files/classes. Please review dependencies."
+            else:  # unsafe
+                indicator = "❌"
+                disabled = True
+                warning = f"{pattern} is unsafe due to dependencies and cannot be selected."
+
+            # Recommended badge if pattern is directly mapped to a detected smell
+            recommended = any(pattern in SMELL_TO_PATTERNS.get(smell, {}).get('patterns', []) for smell in detected_smells)
+            # Use Unicode star for badge in label
+            label = f"{indicator} {info['icon']} {pattern}" + (" ⭐ Recommended" if recommended else "")
+
             # Create a detailed tooltip
             tooltip = f"""
             **Description:** {info['description']}
@@ -264,24 +299,31 @@ def render_pattern_selection_ui(detected_smells: List[str], user_instructions_de
             **Complexity:** {info['complexity']}
             **When to use:** {info['when_to_use']}
             **Benefits:** {', '.join(info['benefits'])}
+            **Ripple Impact:** {safety.capitalize()}
             """
-            
+            if dependencies:
+                tooltip += f"\n**Dependencies:** {', '.join(sorted(dependencies))}"
+            if dependents:
+                tooltip += f"\n**Dependents:** {', '.join(sorted(dependents))}"
             if enabled:
                 tooltip += f"\n**Enabled due to:** {', '.join([s for s in detected_smells if pattern in SMELL_TO_PATTERNS.get(s, {}).get('patterns', [])])}"
-            
+            if not enabled:
+                tooltip += f"\n**Disabled:** Not relevant to detected smells."
+
             cb = st.checkbox(
-                f"{info['icon']} {pattern}",
-                value=checked,
-                disabled=not enabled,
-                help=tooltip
+                label,
+                value=enabled and safety == "safe",
+                disabled=disabled,
+                help=tooltip,
+                key=f"pattern_cb_{category}_{pattern}"
             )
-            
-            if cb and enabled:
+
+            if cb and enabled and safety == "risky":
+                st.warning(warning)
+            if cb and enabled and not disabled:
                 selected_patterns.append(pattern)
-            elif cb and not enabled:
-                st.warning(f"⚠️ {pattern} is not recommended for the detected smells. Proceed with caution.")
-    
-    return selected_patterns, user_instructions, detect_more_smells 
+
+    return selected_patterns, user_instructions, detect_more_smells
 
 def validate_refactoring_impact(refactored_code: str, original_code: str, project_files: List[str]) -> bool:
     """

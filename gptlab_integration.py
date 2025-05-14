@@ -194,22 +194,47 @@ def refactor_with_gptlab(
         logger.error(f"Error in refactoring: {str(e)}")
         raise
 
-def render_refactoring_preview(original_code, refactored_code):
+def render_refactoring_preview(original_code, refactored_code, llm_reasoning=None):
     """
-    Display a unified diff between the original and refactored code.
+    Display a professional side-by-side diff between the original and refactored code, with a change summary and optional LLM reasoning.
     """
-    diff = difflib.unified_diff(
-        original_code.splitlines(),
-        refactored_code.splitlines(),
-        fromfile='Original',
-        tofile='Refactored',
-        lineterm=''
-    )
-    diff_text = '\n'.join(diff)
-    if diff_text.strip():
-        st.code(diff_text, language="diff")
+    import difflib
+    import streamlit as st
+
+    original_lines = original_code.splitlines()
+    refactored_lines = refactored_code.splitlines()
+    max_lines = max(len(original_lines), len(refactored_lines))
+
+    st.markdown("#### 📝 Side-by-Side Diff")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**Original Code**")
+        st.code("\n".join(f"{i+1:>4}: {line}" for i, line in enumerate(original_lines)), language="java")
+    with col2:
+        st.markdown("**Refactored Code**")
+        st.code("\n".join(f"{i+1:>4}: {line}" for i, line in enumerate(refactored_lines)), language="java")
+
+    # Change summary using difflib
+    st.markdown("#### 📊 Change Summary")
+    diff = list(difflib.unified_diff(original_lines, refactored_lines, fromfile='Original', tofile='Refactored', lineterm=''))
+    changed_lines = [line for line in diff if line.startswith('+ ') or line.startswith('- ')]
+    if changed_lines:
+        st.info(f"**Changed lines:** {len(changed_lines)} (see highlighted diff below)")
     else:
-        st.info("No changes detected between the original and refactored code.")
+        st.success("No changes detected between the original and refactored code.")
+
+    # Optional: Show LLM reasoning/explanation if provided
+    if llm_reasoning:
+        st.markdown("#### 🤖 LLM Reasoning/Explanation")
+        st.info(llm_reasoning)
+
+    # Advanced: Show unified diff for power users
+    with st.expander("Show Unified Diff (Advanced)"):
+        diff_text = '\n'.join(diff)
+        if diff_text.strip():
+            st.code(diff_text, language="diff")
+        else:
+            st.info("No changes detected between the original and refactored code.")
 
 def generate_refactoring(original_code, selected_patterns, detected_smells):
     """

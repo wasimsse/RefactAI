@@ -541,7 +541,7 @@ def render_sidebar():
         st.title("⚙️ Configuration")
         
         # Only show refactoring settings in refactoring tab
-        if st.session_state.get("current_tab") == "🛠️ Refactoring":
+        if st.session_state.get("current_tab") == "Refactoring":
             render_refactoring_sidebar()
             return
         
@@ -689,7 +689,7 @@ def render_refactoring_sidebar():
         if not ollama_status:
             st.sidebar.error("❌ Ollama service is not running. Please start Ollama first.")
         else:
-            st.sidebar.success("✅ Ollama service is running")
+            st.sidebar.success("Ollama service is running")
         
         available_local_models = [
             name for name, info in available_models.items() 
@@ -762,7 +762,7 @@ def render_refactoring_sidebar():
                         api_key=api_key
                     )
                     if success:
-                        status.update(label="✅ Model loaded successfully!", state="complete")
+                        status.update(label=" Model loaded successfully!", state="complete")
                         st.session_state.current_model = selected_model
                     else:
                         status.update(label="❌ Failed to load model", state="error")
@@ -770,7 +770,7 @@ def render_refactoring_sidebar():
                     status.update(label=f"❌ Error: {str(e)}", state="error")
     
     # Target smells selection
-    st.sidebar.markdown("### 🎯 Target Smells")
+    st.sidebar.markdown("### Target Smells")
     selected_smells = []
     
     smell_options = {
@@ -799,7 +799,7 @@ def render_refactoring_sidebar():
 
 def render_home_tab():
     """Render the Home tab content."""
-    st.title("🏠 Welcome to RefactAI")
+    st.title("Welcome to RefactAI")
     st.markdown("""
     RefactAI helps you detect and refactor code smells in Java projects using state-of-the-art LLMs.
     Upload your code, analyze for common anti-patterns, and get AI-powered refactoring suggestions.
@@ -895,7 +895,7 @@ def render_upload_tab():
                 if st.session_state.project_manager.load_from_zip(uploaded_file):
                     java_files = st.session_state.project_manager.project_metadata["java_files"]
                     if java_files:
-                        st.success(f"✅ Project loaded successfully! Found {len(java_files)} Java files.")
+                        st.success(f"Project loaded successfully! Found {len(java_files)} Java files.")
                         # Show found files
                         with st.expander("📁 Found Java Files"):
                             for file in java_files:
@@ -1335,7 +1335,7 @@ def render_detection_tab():
                             # Store metrics in session state
                             st.session_state.advanced_metrics = advanced_metrics
                             st.session_state.show_analysis = True
-                            st.toast("✅ Analysis complete!")
+                            st.toast("Analysis complete!")
                             
                         except Exception as e:
                             st.error(f"❌ Error during analysis: {str(e)}")
@@ -1487,7 +1487,7 @@ def render_detection_tab():
                                 st.markdown(f"**Suggestion:** {get_refactoring_suggestion(smell)}")
                                 render_quick_fix_button(smell)
                         else:
-                            st.success("✅ No code smells detected in this file")
+                            st.success(" No code smells detected in this file")
                         
                         # Add metrics visualization
                         with st.expander("📊 Metric Visualization", expanded=True):
@@ -1522,7 +1522,7 @@ def render_detection_tab():
 
 def render_refactoring_tab():
     dependencies = set()  # Always initialize at the top to avoid UnboundLocalError
-    st.title("🛠️ Code Refactoring")
+    st.title("Code Refactoring")
     
     # Initialize session state variables
     if 'refactoring_step' not in st.session_state:
@@ -1568,7 +1568,7 @@ def render_refactoring_tab():
     for i, (col, step) in enumerate(zip(cols, steps)):
         with col:
             if i + 1 == current_step:
-                st.markdown(f"**{step}** 🎯")
+                st.markdown(f"**{step}**")
             else:
                 st.markdown(step)
     
@@ -1701,7 +1701,7 @@ def render_refactoring_tab():
                             for smell, details in smells:
                                 render_smell_card(smell, details)
                 else:
-                    st.success("✅ No code smells detected!")
+                    st.success("No code smells detected!")
             # --- Code Smells Tab ---
             with analysis_tabs[3]:
                 st.markdown("### 📊 Dependency Visualization")
@@ -1767,13 +1767,26 @@ def render_refactoring_tab():
 
     # Step 3: Pattern Selection
     elif current_step == 3:
-        st.markdown("### 🎯 Choose Refactoring Patterns")
+        st.markdown("### Choose Refactoring Patterns")
         st.caption("Select the refactoring patterns to apply based on the analysis.")
         detected_smells = st.session_state.detected_smells
-        # Use the new modular UI
+        # --- UI/UX Improvements for Pattern Selection ---
+        # Show dependency summary and ripple impact above pattern selection
+        if 'dependencies' not in locals() or dependencies is None:
+            dependencies = set()
+        if 'dependents' not in locals() or dependents is None:
+            dependents = set()
+        st.markdown("#### 📎 Dependency Summary")
+        if dependencies:
+            st.info(f"This file depends on: {', '.join(sorted(dependencies))}. Refactoring may have ripple effects.")
+        else:
+            st.success("No external dependencies detected for this file. Refactoring is likely safe.")
+        # Only call render_pattern_selection_ui once
         selected_patterns, user_instructions, detect_more_smells = render_pattern_selection_ui(
-            detected_smells, 
-            st.session_state.get('user_instructions', "")
+            detected_smells,
+            st.session_state.get('user_instructions', ""),
+            dependencies=dependencies,
+            dependents=dependents
         )
         # Navigation buttons
         col1, col2 = st.columns(2)
@@ -1783,6 +1796,87 @@ def render_refactoring_tab():
                 st.rerun()
         with col2:
             if st.button("Next: Preview Changes →", use_container_width=True):
+                # --- Debug Output ---
+                st.write("DEBUG: Selected patterns:", selected_patterns)
+                st.write("DEBUG: Dependencies:", dependencies)
+                st.write("DEBUG: Dependents:", dependents)
+                from pattern_safety import get_pattern_safety
+                for pattern in selected_patterns:
+                    safety = get_pattern_safety(pattern, dependencies, dependents)
+                    st.write(f"DEBUG: Pattern '{pattern}' safety: {safety}")
+                # --- Static Pre-Refactoring Validation ---
+                risky_patterns = []
+                unsafe_patterns = []
+                for pattern in selected_patterns:
+                    safety = get_pattern_safety(pattern, dependencies, dependents)
+                    if safety == "unsafe":
+                        unsafe_patterns.append(pattern)
+                    elif safety == "risky":
+                        risky_patterns.append(pattern)
+                if unsafe_patterns:
+                    st.error(
+                        f"The following patterns are unsafe due to code dependencies and cannot be applied: {', '.join(unsafe_patterns)}"
+                    )
+                    st.stop()
+                elif risky_patterns:
+                    if not st.session_state.get("confirmed_risky_patterns", False):
+                        st.warning(
+                            f"The following patterns are risky and may affect other files/classes: {', '.join(risky_patterns)}. "
+                            "Please review dependencies before proceeding."
+                        )
+                        if st.button("Proceed Anyway (Risky)", key="proceed_risky"):
+                            st.session_state["confirmed_risky_patterns"] = True
+                            st.rerun()
+                        st.stop()
+                    else:
+                        # Reset confirmation for next time
+                        st.session_state["confirmed_risky_patterns"] = False
+                # --- End Static Validation ---
+                # --- LLM Ripple Impact (Sanity) Check ---
+                import re
+                from gptlab_integration import gptlab_chat
+                code_to_refactor = st.session_state.original_code
+                planned_patterns = ', '.join(selected_patterns)
+                dep_list = ', '.join(sorted(dependencies)) if dependencies else 'None'
+                depd_list = ', '.join(sorted(dependents)) if dependents else 'None'
+                llm_ripple_prompt = f"""
+You are an expert Java code reviewer.
+
+Here is the code to be refactored:
+{code_to_refactor}
+
+Associated files/classes/methods (dependencies):
+{dep_list}
+Associated files/classes/methods (dependents):
+{depd_list}
+
+Planned refactoring: {planned_patterns}
+
+Will this refactoring have any unintended effects on the associated files/classes/methods? Please explain in detail. If safe, say why.
+"""
+                st.info("Running LLM-powered ripple impact check...")
+                try:
+                    llm_ripple_response = gptlab_chat(
+                        prompt=llm_ripple_prompt,
+                        model=st.session_state.get('selected_model', 'llama3.2'),
+                        temperature=0.2,
+                        max_tokens=512
+                    )
+                    st.markdown("#### 🤖 LLM Ripple Impact Assessment")
+                    st.info(llm_ripple_response)
+                    # If LLM response contains warning words, require confirmation
+                    if re.search(r"risk|may affect|unintended|warning|not safe|break|error", llm_ripple_response, re.IGNORECASE):
+                        if not st.session_state.get("confirmed_llm_ripple", False):
+                            st.warning("The LLM detected possible ripple impact. Please review the assessment above before proceeding.")
+                            if st.button("Proceed Anyway (LLM Ripple Warning)", key="proceed_llm_ripple"):
+                                st.session_state["confirmed_llm_ripple"] = True
+                                st.rerun()
+                            st.stop()
+                        else:
+                            st.session_state["confirmed_llm_ripple"] = False
+                except Exception as e:
+                    st.error(f"LLM ripple impact check failed: {e}")
+                # --- End LLM Ripple Impact Check ---
                 st.session_state.refactoring_step = 4
                 st.session_state.selected_patterns = selected_patterns
                 st.session_state.user_instructions = user_instructions
@@ -1825,7 +1919,6 @@ def render_refactoring_tab():
                     3. Security considerations
                     4. Best practices violations
                     """
-                
                 refactored_code, metadata = generate_refactoring(
                     st.session_state.original_code,
                     st.session_state.selected_patterns,
@@ -1834,19 +1927,26 @@ def render_refactoring_tab():
                 )
                 st.session_state.refactored_code = refactored_code
                 st.session_state.refactoring_metadata = metadata
-
-        # Display side-by-side comparison
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("### Original Code")
-            st.code(st.session_state.original_code, language="java")
-        with col2:
-            st.markdown("### Refactored Code")
-            st.code(st.session_state.refactored_code, language="java")
-
-        # Show changes
-        st.markdown("### 📊 Changes Summary")
-        render_refactoring_preview(st.session_state.original_code, st.session_state.refactored_code)
+        # --- Extract and display Change Summary ---
+        llm_reasoning = None
+        if st.session_state.refactored_code:
+            import re
+            # Try to extract a 'Change Summary' or 'Changes Made' block from the LLM output
+            match = re.search(r'(Change(?:s)? (?:Made|Summary):[\s\S]+?)(?:\n```|$)', st.session_state.refactored_code, re.IGNORECASE)
+            if match:
+                llm_reasoning = match.group(1).strip()
+                # Remove the summary from the refactored code for display
+                code_without_summary = st.session_state.refactored_code.replace(match.group(0), '').strip()
+            else:
+                code_without_summary = st.session_state.refactored_code
+            # Show the summary in a dedicated section
+            if llm_reasoning:
+                st.markdown("### 📝 Change Summary")
+                st.markdown(llm_reasoning)
+        else:
+            code_without_summary = st.session_state.refactored_code
+        # Display side-by-side comparison and pass summary as reasoning
+        render_refactoring_preview(st.session_state.original_code, code_without_summary, llm_reasoning=llm_reasoning)
 
         # Navigation buttons
         col1, col2 = st.columns(2)
@@ -1861,7 +1961,7 @@ def render_refactoring_tab():
 
     # Step 5: Apply Refactoring
     elif current_step == 5:
-        st.markdown("### ✅ Apply Refactoring")
+        st.markdown("### Apply Refactoring")
         st.caption("Apply the refactoring changes to your code.")
         
         if not st.session_state.refactored_code:
@@ -1893,7 +1993,7 @@ def render_refactoring_tab():
                     "after_metrics": calculate_basic_metrics(st.session_state.refactored_code)
                 })
                 
-                st.success("✅ Refactoring applied successfully!")
+                st.success("Refactoring applied successfully!")
                 
                 # Reset workflow
                 st.session_state.refactoring_step = 1
@@ -1909,7 +2009,7 @@ def render_refactoring_tab():
 
 def render_testing_tab():
     """Render the Testing & Metrics tab content."""
-    st.title("🧪 Testing & Metrics")
+    st.title("Testing & Metrics")
     
     if not st.session_state.project_manager.project_path:
         st.warning("Please upload a project first")
@@ -1941,9 +2041,9 @@ def render_testing_tab():
     with st.expander("🔍 Test Results", expanded=True):
         # TODO: Implement real test results display
         st.markdown("""
-        ✅ UserManagerTest: 12/12 passed
-        ✅ DataServiceTest: 8/8 passed
-        ✅ UtilsTest: 5/5 passed
+        UserManagerTest: 12/12 passed
+        DataServiceTest: 8/8 passed
+        UtilsTest: 5/5 passed
         """)
     
     # Performance Comparison
@@ -1958,7 +2058,7 @@ def main():
     """Main function to run the Streamlit dashboard."""
     # Store current tab in session state
     if "current_tab" not in st.session_state:
-        st.session_state.current_tab = "🏠 Home"
+        st.session_state.current_tab = "Home"
     
     # Render sidebar and get configuration
     selected_smells, refactoring_mode = render_sidebar()
@@ -1973,7 +2073,7 @@ def main():
     ])
     
     # Update current tab
-    for i, tab in enumerate(["🏠 Home", "📂 Project Upload", "🔍 Smell Detection", "🛠️ Refactoring", "🧪 Testing & Metrics"]):
+    for i, tab in enumerate([" Home", "📂 Project Upload", "🔍 Smell Detection", "🛠️ Refactoring", "🧪 Testing & Metrics"]):
         if tabs[i].selected:
             st.session_state.current_tab = tab
     
@@ -2191,7 +2291,7 @@ def generate_refactoring(original_code, selected_patterns, detected_smells, user
     if not selected_patterns:
         return original_code, {"success": False, "reason": "No patterns selected."}
     # Prepare additional instructions
-    instructions = f"Apply the following refactoring patterns: {', '.join(selected_patterns)}. {user_instructions}"
+    instructions = f"Apply the following refactoring patterns: {', '.join(selected_patterns)}. {user_instructions}\n\nAt the end, provide a markdown-formatted 'Change Summary' listing each pattern applied and a short description of what was changed."
     # Use detected smells as context
     try:
         st.info(f"Prompt being sent to LLM:\n{instructions}")

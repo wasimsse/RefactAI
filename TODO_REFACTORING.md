@@ -1,49 +1,52 @@
-# RefactAI – Professional Refactoring Tab Improvement Plan
 
-## 1. LLM Model Selection (Professional & Dynamic)
-- Show all available LLMs in a dropdown, clearly labeled, with model details (type, size, etc.).
-- Dropdown in the sidebar or at the top of the Refactoring tab.
-- Show model info (e.g., "Viking-33B (GPT-Lab, 33B params)").
-- Optionally, show model status (available, busy, etc.) if possible.
+### TODO List
 
-## 2. Step-by-Step Professional Workflow
-- Guide the user through a clear, logical, and professional refactoring process.
-- Phases:
-  1. File Selection: Search/filter files, show file info (size, last modified, LOC).
-  2. Code Analysis: Show metrics (LOC, complexity, coupling, etc.), visualize code smells.
-  3. Pattern Selection: Enable/disable patterns based on analysis, show descriptions.
-  4. LLM Model & Parameter Selection: Model dropdown, temperature, max tokens, etc.
-  5. Preview Refactoring: Side-by-side diff, highlighted changes, LLM's reasoning.
-  6. Apply & Save: Confirm/apply changes, download before/after code and diff.
+1. **Pre-Refactoring Validation**
+   - [ ] Add static validation checks before applying refactoring (e.g., dependency analysis, test coverage).
+   - [ ] Add an LLM "sanity check" step before finalizing user-selected refactorings.
 
-## 3. Accuracy & Quality Controls
-- Show the exact prompt sent to the LLM.
-- Show the LLM's explanation/reasoning (if returned).
-- Allow user to rate/refine the output.
-- Optionally, allow user to edit the prompt or add custom instructions.
-- Optionally, run static analysis on the refactored code and show new metrics/smells.
+2. **Automated Testing & Rollback**
+   - [ ] Integrate test running after refactoring; block if tests fail.
+   - [ ] Add a rollback/undo feature for applied refactorings.
 
-## 4. Professional UI/UX Enhancements
-- Progress indicator for workflow steps.
-- Clear error/success messages.
-- Tooltips/help for each option.
-- Consistent, modern design (colors, spacing, icons).
+3. **Logging & Traceability**
+   - [ ] Log all refactoring actions, user choices, and LLM responses for traceability.
 
-## 5. (Optional) Advanced Features
-- Batch refactoring (multiple files/classes).
-- Refactoring history and undo.
-- Export full refactoring report (PDF/HTML).
-- Compare outputs from multiple LLMs side-by-side.
+4. **Advanced Recommendations**
+   - [ ] Implement dynamic pattern ranking/highlighting based on severity, frequency, and code metrics.
+   - [ ] Add a pattern impact preview (summary of code changes for each pattern).
 
----
+5. **User Feedback Loop**
+   - [ ] Allow users to rate or comment on pattern usefulness/results.
 
-## Implementation Roadmap
+6. **Extensibility**
+   - [ ] Add a plugin/config system for new patterns.
 
-1. Model Selection UI: Add a professional dropdown for all LLMs, with info and status.
-2. Refactoring Workflow Polish: Refine each step for clarity, guidance, and professional look.
-3. Accuracy/Quality Feedback: Show prompt, LLM reasoning, and allow user feedback.
-4. UI/UX Enhancements: Progress bar, tooltips, error handling, and visual polish.
-5. (Optional) Advanced Features: Batch, history, export, multi-LLM comparison.
+### Implementation Mapping Table
+
+| Feature                        | Where to Implement (Suggested Files/Functions)                |
+|--------------------------------|--------------------------------------------------------------|
+| Pre-Refactoring Validation     | `dashboard.py` (before LLM call), `pattern_safety.py`         |
+| Automated Testing & Rollback   | `dashboard.py` (after refactoring), new test/rollback modules |
+| Logging & Traceability         | `dashboard.py`, new logging module                            |
+| Advanced Recommendations       | `refactoring_patterns.py`, pattern selection UI               |
+| User Feedback Loop             | Pattern selection/preview UI, new feedback module             |
+| Extensibility                  | `refactoring_patterns.py`, plugin/config system               |
+
+### Where to Implement (Choose Patterns Step)
+
+The following table summarizes the best place in the UI/codebase to implement each feature, focusing on the 'Choose Patterns' step under the Refactoring tab:
+
+| Feature                        | Best Place in UI/Codebase (for "Choose Patterns" step)         |
+|--------------------------------|---------------------------------------------------------------|
+| Pre-Refactoring Validation     | `dashboard.py` (on "Next: Preview Changes" click, after pattern selection) |
+| Automated Testing & Rollback   | `dashboard.py` (after refactoring, info/reminder in UI)        |
+| Logging & Traceability         | `dashboard.py` (log on pattern selection/confirmation)         |
+| Advanced Recommendations       | `refactoring_patterns.py` (ranking), `dashboard.py` (UI logic) |
+| User Feedback Loop             | `dashboard.py` (feedback widget in UI)                        |
+| Extensibility                  | `refactoring_patterns.py` (backend), `dashboard.py` (UI link)  |
+
+> **Work through each item one by one, testing thoroughly after each step.**
 
 ---
 
