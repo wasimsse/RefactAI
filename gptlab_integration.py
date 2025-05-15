@@ -26,7 +26,8 @@ GPTLAB_ENDPOINTS = {
         "status": "active"
     }
 }
-GPTLAB_BEARER_TOKEN = "sk-ollama-gptlab-6cc87c9bd38b24aca0fe77f0c9c4d68d"
+GPTLAB_API_KEY = "sk-ollama-gptlab-6cc87c9bd38b24aca0fe77f0c9c4d68d"
+GPTLAB_BASE_URL = "https://gptlab.rd.tuni.fi/GPT-Lab/resources/RANDOM/v1"
 
 DEFAULT_MODELS = {
     "llama3.2": {"type": "local", "provider": "Ollama"},
@@ -63,7 +64,7 @@ def normalize_model_name(model_name: str) -> str:
     """Normalize model name to standard format."""
     return model_name.lower().replace(" ", "-")
 
-def gptlab_chat(prompt: str, model: str, temperature: float = 0.3, max_tokens: int = 4096, **kwargs) -> str:
+def gptlab_chat(prompt: str, model: str, temperature: float = 0.2, max_tokens: int = 512, **kwargs) -> str:
     """
     Send a chat request to either local Ollama or GPT-Lab cloud.
     
@@ -71,40 +72,39 @@ def gptlab_chat(prompt: str, model: str, temperature: float = 0.3, max_tokens: i
         prompt: The input prompt
         model: Model name to use
         temperature: Sampling temperature (0.0 to 1.0)
-        max_tokens: Maximum number of tokens to generate (default: 4096)
+        max_tokens: Maximum number of tokens to generate (default: 512)
         **kwargs: Additional parameters for the model
     """
     try:
-        if DEFAULT_MODELS.get(model, {}).get("type") == "local":
-            # Use local Ollama
-            response = requests.post(
-                "http://localhost:11434/api/generate",
-                json={
-                    "model": model,
-                    "prompt": prompt,
-                    "temperature": temperature,
-                    "max_tokens": max_tokens,
-                    **kwargs
-                }
-            )
-            
-            if response.status_code == 200:
-                return response.json().get("response", "")
-            else:
-                raise Exception(f"Ollama request failed: {response.text}")
+        url = f"{GPTLAB_BASE_URL}/completions"
+        headers = {
+            "Authorization": f"Bearer {GPTLAB_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": model,
+            "prompt": prompt,
+            "temperature": temperature,
+            "max_tokens": max_tokens
+        }
+        payload.update(kwargs)
+        response = requests.post(url, headers=headers, json=payload)
+        if response.status_code == 200:
+            result = response.json()
+            # For OpenAI-compatible API, the result may be in 'choices'
+            if "choices" in result and result["choices"]:
+                return result["choices"][0].get("text") or result["choices"][0].get("message", {}).get("content", "")
+            return response.text
         else:
-            # Use GPT-Lab cloud
-            client = get_gptlab_client()
-            return client.chat(prompt, model, temperature=temperature, max_tokens=max_tokens, **kwargs)
-            
+            raise Exception(f"API request failed: {response.text}")
     except Exception as e:
         logger.error(f"Error in chat: {str(e)}")
         raise
 
 class GPTLabClient:
     def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or GPTLAB_BEARER_TOKEN
-        self.base_url = GPTLAB_ENDPOINTS["CLOUD"]["url"]
+        self.api_key = api_key or GPTLAB_API_KEY
+        self.base_url = GPTLAB_BASE_URL
     
     def chat(self, prompt: str, model: str, temperature: float = 0.3, max_tokens: int = 4096, **kwargs) -> str:
         """Send a chat request to GPT-Lab API."""

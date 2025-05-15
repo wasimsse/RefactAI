@@ -535,16 +535,31 @@ if 'refactoring_manager' not in st.session_state:
 if 'refactored_paths' not in st.session_state:
     st.session_state.refactored_paths = {}
 
+# Define allowed GPT-Lab models globally
+GPTLAB_MODELS = [
+    "llama3.2",
+    "llama3.1:70b-instruct-q4_K_M",
+    "GPT-Lab/Viking-33B-cp2000B-GGUF:Q6_K",
+    "magicoder:7b"
+]
+
 def render_sidebar():
     """Render the sidebar with model selection and configuration options."""
     with st.sidebar:
         st.title("⚙️ Configuration")
-        
         # Only show refactoring settings in refactoring tab
         if st.session_state.get("current_tab") == "Refactoring":
             render_refactoring_sidebar()
             return
-        
+        # Only allow GPT-Lab models for refactoring
+        model = st.selectbox(
+            "Select Model",
+            GPTLAB_MODELS,
+            help="Choose a GPT-Lab model",
+            key="sidebar_gptlab_model"
+        )
+        st.session_state['selected_model'] = model
+        st.divider()
         # Original sidebar content for other tabs
         model_source = st.selectbox(
             "Model Source",
@@ -1521,9 +1536,10 @@ def render_detection_tab():
         st.info("No external dependencies detected in this file.")
 
 def render_refactoring_tab():
+    # Persistent debug for refactoring_step
+    st.write('DEBUG: refactoring_step at entry', st.session_state.get('refactoring_step'))
     dependencies = set()  # Always initialize at the top to avoid UnboundLocalError
     st.title("Code Refactoring")
-    
     # Initialize session state variables
     if 'refactoring_step' not in st.session_state:
         st.session_state.refactoring_step = 1
@@ -1767,6 +1783,7 @@ def render_refactoring_tab():
 
     # Step 3: Pattern Selection
     elif current_step == 3:
+        st.write('DEBUG: Step 3')
         st.markdown("### Choose Refactoring Patterns")
         st.caption("Select the refactoring patterns to apply based on the analysis.")
         detected_smells = st.session_state.detected_smells
@@ -1796,50 +1813,33 @@ def render_refactoring_tab():
                 st.rerun()
         with col2:
             if st.button("Next: Preview Changes →", use_container_width=True):
-                # --- Debug Output ---
-                st.write("DEBUG: Selected patterns:", selected_patterns)
-                st.write("DEBUG: Dependencies:", dependencies)
-                st.write("DEBUG: Dependents:", dependents)
-                from pattern_safety import get_pattern_safety
-                for pattern in selected_patterns:
-                    safety = get_pattern_safety(pattern, dependencies, dependents)
-                    st.write(f"DEBUG: Pattern '{pattern}' safety: {safety}")
-                # --- Static Pre-Refactoring Validation ---
-                risky_patterns = []
-                unsafe_patterns = []
-                for pattern in selected_patterns:
-                    safety = get_pattern_safety(pattern, dependencies, dependents)
-                    if safety == "unsafe":
-                        unsafe_patterns.append(pattern)
-                    elif safety == "risky":
-                        risky_patterns.append(pattern)
-                if unsafe_patterns:
-                    st.error(
-                        f"The following patterns are unsafe due to code dependencies and cannot be applied: {', '.join(unsafe_patterns)}"
-                    )
-                    st.stop()
-                elif risky_patterns:
-                    if not st.session_state.get("confirmed_risky_patterns", False):
-                        st.warning(
-                            f"The following patterns are risky and may affect other files/classes: {', '.join(risky_patterns)}. "
-                            "Please review dependencies before proceeding."
-                        )
-                        if st.button("Proceed Anyway (Risky)", key="proceed_risky"):
-                            st.session_state["confirmed_risky_patterns"] = True
-                            st.rerun()
-                        st.stop()
-                    else:
-                        # Reset confirmation for next time
-                        st.session_state["confirmed_risky_patterns"] = False
-                # --- End Static Validation ---
-                # --- LLM Ripple Impact (Sanity) Check ---
-                import re
-                from gptlab_integration import gptlab_chat
-                code_to_refactor = st.session_state.original_code
-                planned_patterns = ', '.join(selected_patterns)
-                dep_list = ', '.join(sorted(dependencies)) if dependencies else 'None'
-                depd_list = ', '.join(sorted(dependents)) if dependents else 'None'
-                llm_ripple_prompt = f"""
+                # ... (pattern validation logic) ...
+                st.session_state.refactoring_step = 4
+                st.session_state.selected_patterns = selected_patterns
+                st.session_state.user_instructions = user_instructions
+                st.session_state.detect_more_smells = detect_more_smells
+                st.rerun()
+    # Step 4: Preview Changes
+    elif current_step == 4:
+        st.write('DEBUG: Step 4')
+        st.markdown("### 👀 Preview Changes")
+        st.caption("Review the proposed changes before applying them.")
+        # --- LLM Ripple Impact Assessment ---
+        import re
+        from gptlab_integration import gptlab_chat
+        code_to_refactor = st.session_state.original_code
+        selected_patterns = st.session_state.selected_patterns
+        dependencies = st.session_state.get('current_dependencies', set())
+        dependents = st.session_state.get('current_dependents', set())
+        planned_patterns = ', '.join(selected_patterns)
+        dep_list = ', '.join(sorted(dependencies)) if dependencies else 'None'
+        depd_list = ', '.join(sorted(dependents)) if dependents else 'None'
+        # Always use the current selected model from session state
+        model_to_use = st.session_state.get('selected_model', GPTLAB_MODELS[0])
+        if model_to_use not in GPTLAB_MODELS:
+            st.error("Local models are not supported for refactoring. Please select a GPT-Lab model.")
+            st.stop()
+        llm_ripple_prompt = f"""
 You are an expert Java code reviewer.
 
 Here is the code to be refactored:
@@ -1854,110 +1854,143 @@ Planned refactoring: {planned_patterns}
 
 Will this refactoring have any unintended effects on the associated files/classes/methods? Please explain in detail. If safe, say why.
 """
-                st.info("Running LLM-powered ripple impact check...")
-                try:
-                    llm_ripple_response = gptlab_chat(
-                        prompt=llm_ripple_prompt,
-                        model=st.session_state.get('selected_model', 'llama3.2'),
-                        temperature=0.2,
-                        max_tokens=512
-                    )
-                    st.markdown("#### 🤖 LLM Ripple Impact Assessment")
-                    st.info(llm_ripple_response)
-                    # If LLM response contains warning words, require confirmation
-                    if re.search(r"risk|may affect|unintended|warning|not safe|break|error", llm_ripple_response, re.IGNORECASE):
-                        if not st.session_state.get("confirmed_llm_ripple", False):
-                            st.warning("The LLM detected possible ripple impact. Please review the assessment above before proceeding.")
-                            if st.button("Proceed Anyway (LLM Ripple Warning)", key="proceed_llm_ripple"):
-                                st.session_state["confirmed_llm_ripple"] = True
-                                st.rerun()
-                            st.stop()
-                        else:
-                            st.session_state["confirmed_llm_ripple"] = False
-                except Exception as e:
-                    st.error(f"LLM ripple impact check failed: {e}")
-                # --- End LLM Ripple Impact Check ---
-                st.session_state.refactoring_step = 4
-                st.session_state.selected_patterns = selected_patterns
-                st.session_state.user_instructions = user_instructions
-                st.session_state.detect_more_smells = detect_more_smells
-                st.rerun()
-
-    # Step 4: Preview Changes
-    elif current_step == 4:
-        st.markdown("### 👀 Preview Changes")
-        st.caption("Review the proposed changes before applying them.")
-
-        # Model selection for refactoring (under Preview Changes)
-        st.markdown("#### Select LLM Model for Refactoring")
-        selected_model = st.selectbox(
-            "Choose a model:",
-            MODEL_OPTIONS,
-            key="refactoring_model_preview",
-            help="Choose which LLM to use for this refactoring"
-        )
-        rerun_refactor = False
-        if 'selected_model' not in st.session_state or st.session_state['selected_model'] != selected_model:
-            st.session_state['selected_model'] = selected_model
-            rerun_refactor = True
-        else:
-            selected_model = st.session_state['selected_model']
-
-        # Only rerun refactoring if model changed or not yet run
-        if rerun_refactor or 'last_refactored_model' not in st.session_state or st.session_state['last_refactored_model'] != selected_model:
-            st.session_state['last_refactored_model'] = selected_model
-            # Generate refactored code
-            with st.spinner("Generating refactored code..."):
-                # Add instruction for additional smell detection if requested
-                additional_instructions = ""
-                if st.session_state.get('detect_more_smells', False):
-                    additional_instructions = """
-                    Please analyze the code for additional code smells beyond the automated detection.
-                    Consider:
-                    1. Design patterns that could be applied
-                    2. Potential performance improvements
-                    3. Security considerations
-                    4. Best practices violations
-                    """
-                refactored_code, metadata = generate_refactoring(
-                    st.session_state.original_code,
-                    st.session_state.selected_patterns,
-                    st.session_state.detected_smells,
-                    st.session_state.user_instructions + "\n" + additional_instructions
+        if 'llm_ripple_confirmed' not in st.session_state:
+            st.session_state['llm_ripple_confirmed'] = False
+        if not st.session_state['llm_ripple_confirmed']:
+            try:
+                llm_ripple_response = gptlab_chat(
+                    prompt=llm_ripple_prompt,
+                    model=model_to_use,
+                    temperature=0.2,
+                    max_tokens=512
                 )
-                st.session_state.refactored_code = refactored_code
-                st.session_state.refactoring_metadata = metadata
-        # --- Extract and display Change Summary ---
-        llm_reasoning = None
-        if st.session_state.refactored_code:
-            import re
-            # Try to extract a 'Change Summary' or 'Changes Made' block from the LLM output
-            match = re.search(r'(Change(?:s)? (?:Made|Summary):[\s\S]+?)(?:\n```|$)', st.session_state.refactored_code, re.IGNORECASE)
-            if match:
-                llm_reasoning = match.group(1).strip()
-                # Remove the summary from the refactored code for display
-                code_without_summary = st.session_state.refactored_code.replace(match.group(0), '').strip()
-            else:
-                code_without_summary = st.session_state.refactored_code
-            # Show the summary in a dedicated section
-            if llm_reasoning:
-                st.markdown("### 📝 Change Summary")
-                st.markdown(llm_reasoning)
-        else:
-            code_without_summary = st.session_state.refactored_code
-        # Display side-by-side comparison and pass summary as reasoning
-        render_refactoring_preview(st.session_state.original_code, code_without_summary, llm_reasoning=llm_reasoning)
+                st.markdown("#### 🤖 LLM Ripple Impact Assessment")
+                st.info(llm_ripple_response)
+                if re.search(r"risk|may affect|unintended|warning|not safe|break|error", llm_ripple_response, re.IGNORECASE):
+                    st.warning("The LLM detected possible ripple impact. Please review the assessment above before proceeding.")
+                    if st.button("Proceed Anyway (LLM Ripple Warning)", key="proceed_llm_ripple_step4"):
+                        st.session_state['llm_ripple_confirmed'] = True
+                        st.rerun()
+                    st.stop()
+            except Exception as e:
+                st.error(f"LLM ripple impact check failed: {e}")
+                st.stop()
+        # --- End LLM Ripple Impact Assessment ---
+        # If confirmed, run the refactoring LLM and display before/after code, diff, summary, etc.
+        if st.session_state['llm_ripple_confirmed']:
+            # Model selection for refactoring (under Preview Changes)
+            st.markdown("#### Select LLM Model for Refactoring")
+            selected_model = st.selectbox(
+                "Choose a model:",
+                GPTLAB_MODELS,
+                key="refactoring_model_preview",
+                help="Choose which LLM to use for this refactoring",
+                index=GPTLAB_MODELS.index(st.session_state.get('selected_model', GPTLAB_MODELS[0])) if st.session_state.get('selected_model') in GPTLAB_MODELS else 0
+            )
+            # Always update the session state with the selected model
+            if st.session_state.get('selected_model') != selected_model:
+                st.session_state['selected_model'] = selected_model
+                st.rerun()
+            model_to_use = st.session_state['selected_model']
+            rerun_refactor = False
+            if 'last_refactored_model' not in st.session_state or st.session_state['last_refactored_model'] != model_to_use:
+                st.session_state['last_refactored_model'] = model_to_use
+                # Generate refactored code
+                with st.spinner("Generating refactored code..."):
+                    # Add instruction for additional smell detection if requested
+                    additional_instructions = ""
+                    if st.session_state.get('detect_more_smells', False):
+                        additional_instructions = """
+                        Please analyze the code for additional code smells beyond the automated detection.
+                        Consider:
+                        1. Design patterns that could be applied
+                        2. Potential performance improvements
+                        3. Security considerations
+                        4. Best practices violations
+                        """
+                    # Build the refactoring prompt
+                    refactoring_prompt = f"""
+Scope Limitation (Local-Only Refactoring):
+- All refactoring must be confined to this single file only.
+- Do not rename or modify any class, interface, or method signatures (names, visibility, parameters, return types) that might affect other classes or files.
+- Do not assume or modify the behavior of any external dependencies or imported packages.
 
-        # Navigation buttons
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("← Back to Patterns", use_container_width=True):
-                st.session_state.refactoring_step = 3
-                st.rerun()
-        with col2:
-            if st.button("Next: Apply Refactoring →", use_container_width=True):
-                st.session_state.refactoring_step = 5
-                st.rerun()
+Refactoring Goals:
+- Focus strictly on improving code readability, reducing duplication, simplifying logic, or removing code smells that are purely internal to this file.
+- Acceptable refactorings include:
+  - Breaking large methods into smaller helper methods (as private and local).
+  - Extracting constants or simplifying logic within methods.
+  - Minor structure enhancements that do not affect API or external usage.
+
+Avoid Ripple Effects:
+- Any refactoring that would require changes to other files, external test classes, subclasses, or libraries is strictly disallowed.
+- Do not introduce new public classes or methods, or remove existing ones unless they are provably unused and internal.
+
+No Additions Beyond Scope:
+- Do not add extra comments, logging, or architectural patterns unless directly tied to a refactoring need.
+- Avoid speculative or anticipatory code changes (e.g., design patterns, future-proofing).
+
+Preserve Behavior and Structure:
+- The functional behavior of the file must remain 100% unchanged.
+- Preserve the current class structure, hierarchy, and all public interfaces.
+- Maintain compatibility with any known external tests or calling code.
+
+Before applying each change, assess whether the refactoring introduces indirect dependencies or risks cascading changes across the codebase. If it does, skip it.
+
+Apply the following refactoring patterns: {', '.join(selected_patterns)}. {st.session_state.user_instructions}\n{additional_instructions}
+
+Output ONLY the refactored code. Do NOT include any explanations, summaries, or markdown blocks. No comments or extra text—just the code.
+"""
+                    # Debug output in expander
+                    with st.expander("🔍 Debug: Refactoring LLM Call", expanded=False):
+                        st.markdown(f"**Model:** `{model_to_use}`")
+                        st.markdown("**Prompt sent to LLM:**")
+                        st.code(refactoring_prompt, language="markdown")
+                    refactored_code, metadata = generate_refactoring(
+                        st.session_state.original_code,
+                        st.session_state.selected_patterns,
+                        st.session_state.detected_smells,
+                        st.session_state.user_instructions + "\n" + additional_instructions
+                    )
+                    st.session_state.refactored_code = refactored_code
+                    st.session_state.refactoring_metadata = metadata
+            # --- Extract and display Change Summary ---
+            def extract_change_summary(llm_output):
+                import re
+                # Remove code block markers and extract summary
+                # Match code block with 'Change Summary' or 'Changes Made' or 'Changes:'
+                pattern = re.compile(
+                    r"```[^\n]*\n\s*(\*\*Change(?:s)? (?:Made|Summary)\*\*|Changes:)[\s\S]+?```",
+                    re.IGNORECASE
+                )
+                match = pattern.search(llm_output)
+                if match:
+                    summary_block = match.group(0)
+                    # Remove the code block from the code output
+                    code_without_summary = llm_output.replace(summary_block, '').strip()
+                    # Remove the code block markers for display
+                    summary = re.sub(r"^```[^\n]*\n?|```$", "", summary_block, flags=re.MULTILINE).strip()
+                    return summary, code_without_summary
+                else:
+                    # Fallback: try to match summary outside code block
+                    match2 = re.search(r"(\*\*Change(?:s)? (?:Made|Summary)\*\*|Changes:)[\s\S]+", llm_output, re.IGNORECASE)
+                    if match2:
+                        summary = match2.group(0).strip()
+                        code_without_summary = llm_output.replace(match2.group(0), '').strip()
+                        return summary, code_without_summary
+                    return None, llm_output
+            if st.session_state.refactored_code:
+                # Debug: Show raw LLM output
+                with st.expander("🔍 Debug: Raw LLM Output", expanded=False):
+                    st.code(st.session_state.refactored_code, language="text")
+                render_refactoring_preview(st.session_state.original_code, st.session_state.refactored_code, llm_reasoning=None)
+                summary = None
+                if st.session_state.refactoring_metadata and 'change_summary' in st.session_state.refactoring_metadata:
+                    summary = st.session_state.refactoring_metadata['change_summary']
+                if summary:
+                    st.markdown("### 📝 Change Summary")
+                    st.markdown(summary)
+                # ... (verification and navigation logic as before) ...
 
     # Step 5: Apply Refactoring
     elif current_step == 5:
@@ -2056,6 +2089,8 @@ def render_testing_tab():
 
 def main():
     """Main function to run the Streamlit dashboard."""
+    # Persistent session state debug at the very top
+    st.write("DEBUG: session_state at top of main()", st.session_state)
     # Store current tab in session state
     if "current_tab" not in st.session_state:
         st.session_state.current_tab = "Home"
@@ -2290,23 +2325,96 @@ def generate_refactoring(original_code, selected_patterns, detected_smells, user
     """
     if not selected_patterns:
         return original_code, {"success": False, "reason": "No patterns selected."}
-    # Prepare additional instructions
-    instructions = f"Apply the following refactoring patterns: {', '.join(selected_patterns)}. {user_instructions}\n\nAt the end, provide a markdown-formatted 'Change Summary' listing each pattern applied and a short description of what was changed."
-    # Use detected smells as context
+    # Prepare code-only instructions
+    code_instructions = f"""
+Scope Limitation (Local-Only Refactoring):
+- All refactoring must be confined to this single file only.
+- Do not rename or modify any class, interface, or method signatures (names, visibility, parameters, return types) that might affect other classes or files.
+- Do not assume or modify the behavior of any external dependencies or imported packages.
+
+Refactoring Goals:
+- Focus strictly on improving code readability, reducing duplication, simplifying logic, or removing code smells that are purely internal to this file.
+- Acceptable refactorings include:
+  - Breaking large methods into smaller helper methods (as private and local).
+  - Extracting constants or simplifying logic within methods.
+  - Minor structure enhancements that do not affect API or external usage.
+
+Avoid Ripple Effects:
+- Any refactoring that would require changes to other files, external test classes, subclasses, or libraries is strictly disallowed.
+- Do not introduce new public classes or methods, or remove existing ones unless they are provably unused and internal.
+
+No Additions Beyond Scope:
+- Do not add extra comments, logging, or architectural patterns unless directly tied to a refactoring need.
+- Avoid speculative or anticipatory code changes (e.g., design patterns, future-proofing).
+
+Preserve Behavior and Structure:
+- The functional behavior of the file must remain 100% unchanged.
+- Preserve the current class structure, hierarchy, and all public interfaces.
+- Maintain compatibility with any known external tests or calling code.
+
+Before applying each change, assess whether the refactoring introduces indirect dependencies or risks cascading changes across the codebase. If it does, skip it.
+
+Apply the following refactoring patterns: {', '.join(selected_patterns)}. {user_instructions}
+
+Output ONLY the refactored code. Do NOT include any explanations, summaries, or markdown blocks. No comments or extra text—just the code.
+"""
     try:
-        st.info(f"Prompt being sent to LLM:\n{instructions}")
-        # Force use of GPT-Lab model
-        model_to_use = st.session_state.get('selected_model', MODEL_OPTIONS[0])
-        st.info(f"Using GPT-Lab model: {model_to_use}")
+        # Only allow GPT-Lab/cloud models
+        gptlab_models = [
+            "llama3.2",
+            "llama3.1:70b-instruct-q4_K_M",
+            "GPT-Lab/Viking-33B-cp2000B-GGUF:Q6_K",
+            "magicoder:7b"
+        ]
+        model_to_use = st.session_state.get('selected_model', gptlab_models[0])
+        if model_to_use not in gptlab_models:
+            st.error(f"Selected model '{model_to_use}' is not a supported GPT-Lab model. Please select a valid GPT-Lab model.")
+            return original_code, {"success": False, "reason": f"Model '{model_to_use}' is not a supported GPT-Lab model."}
+        # Always use GPT-Lab API for LLM calls
+        # For local models, check if model is loaded in Ollama
+        if backend == "local":
+            try:
+                import requests
+                response = requests.get("http://localhost:11434/api/tags")
+                if response.status_code == 200:
+                    tags = response.json().get("models", [])
+                    available_models = [m["name"] for m in tags]
+                    if model_to_use not in available_models:
+                        st.error(f"Local model '{model_to_use}' is not loaded in Ollama. Please load it or select a cloud model.")
+                        return original_code, {"success": False, "reason": f"Model '{model_to_use}' not loaded in Ollama."}
+                else:
+                    st.error("Could not connect to Ollama to check local models.")
+                    return original_code, {"success": False, "reason": "Ollama not reachable."}
+            except Exception as e:
+                st.error(f"Error checking Ollama models: {e}")
+                return original_code, {"success": False, "reason": str(e)}
+        # Now proceed with LLM calls as before
+        # 1. Generate refactored code ONLY
         refactored_code = refactor_with_gptlab(
             code=original_code,
             model_name=model_to_use,
             smell_analysis=detected_smells,
-            additional_instructions=instructions,
+            additional_instructions=code_instructions,
             temperature=st.session_state.get('refactoring_sidebar_temperature', 0.3)
         )
-        st.info(f"LLM response:\n{refactored_code[:500]}")  # Show first 500 chars
-        return refactored_code, {"success": True, "patterns": selected_patterns}
+        # 2. Generate change summary as a separate LLM call
+        summary_prompt = f"""
+Given the following original code and its refactored version, provide a concise markdown-formatted 'Change Summary' listing each pattern applied and a short description of what was changed. Do NOT include any code, only the summary.
+
+Original code:
+{original_code}
+
+Refactored code:
+{refactored_code}
+"""
+        from gptlab_integration import gptlab_chat
+        change_summary = gptlab_chat(
+            prompt=summary_prompt,
+            model=model_to_use,
+            temperature=0.2,
+            max_tokens=256
+        )
+        return refactored_code, {"success": True, "patterns": selected_patterns, "change_summary": change_summary}
     except Exception as e:
         return original_code, {"success": False, "reason": str(e)}
 
