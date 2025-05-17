@@ -2043,6 +2043,56 @@ Will this refactoring have any unintended effects on the associated files/classe
         st.markdown("The following changes will be made:")
         # Show changes summary
         render_refactoring_preview(st.session_state.original_code, st.session_state.refactored_code)
+        # --- Enhanced LLM summary ---
+        try:
+            from gptlab_integration import gptlab_chat
+            summary_prompt = f"""
+Given the following original code and its refactored version, provide a concise, bullet-point summary of the main refactoring changes. Focus on what was improved, extracted, renamed, or simplified. Do NOT include code, only a human-readable summary.
+
+Original code:
+{st.session_state.original_code}
+
+Refactored code:
+{st.session_state.refactored_code}
+"""
+            summary = gptlab_chat(
+                prompt=summary_prompt,
+                model=st.session_state.get('selected_model', 'llama3.2'),
+                temperature=0.2,
+                max_tokens=512
+            )
+            st.markdown(
+                f"""
+                <div style='background:#e6f9e6;border-radius:0.5rem;padding:1rem;margin-bottom:1rem;border:1px solid #b2dfdb;'>
+                <b>📝 Enhanced Refactoring Summary:</b><br>{summary}
+                </div>
+                """, unsafe_allow_html=True)
+        except Exception as e:
+            st.info(f"Could not generate enhanced summary: {e}")
+        # --- Undo/Restore History ---
+        st.markdown("### Refactoring History & Undo/Restore")
+        history = st.session_state.get('refactoring_history', [])
+        if history:
+            import pandas as pd
+            hist_df = pd.DataFrame(history)
+            # Show a table with restore buttons
+            for idx, row in hist_df[::-1].iterrows():
+                with st.expander(f"{row['timestamp']} — {row['file']} — {', '.join(row['patterns'])}"):
+                    st.markdown(f"**Summary:** {row.get('instructions','')}")
+                    st.markdown(f"**Before metrics:** {row.get('before_metrics',{})}")
+                    st.markdown(f"**After metrics:** {row.get('after_metrics',{})}")
+                    if st.button(f"Restore this version", key=f"restore_{idx}"):
+                        # Restore file and session state
+                        file_path = Path(st.session_state.project_manager.project_path) / row['file']
+                        with open(file_path, 'w') as f:
+                            f.write(row['before_metrics'].get('code', st.session_state.original_code))
+                        st.session_state.original_code = row['before_metrics'].get('code', st.session_state.original_code)
+                        st.session_state.refactored_code = row['before_metrics'].get('code', st.session_state.original_code)
+                        st.session_state.refactoring_step = 1
+                        st.success(f"Restored version from {row['timestamp']}")
+                        st.rerun()
+        else:
+            st.info("No refactoring history yet. Apply changes to start tracking history.")
         # Apply changes
         if st.button("Apply Changes", type="primary", use_container_width=True):
             try:
@@ -2071,6 +2121,82 @@ Will this refactoring have any unintended effects on the associated files/classe
             if st.button("← Back to Preview", use_container_width=True, key="back_to_step4_btn"):
                 st.session_state.refactoring_step = 4
                 st.rerun()
+        # --- Export/Reporting Options ---
+        import difflib
+        st.markdown("""
+        <div style='background:#f8f9fa;border-radius:0.7rem;padding:1.5rem 1rem 1rem 1rem;margin-bottom:1.5rem;border:1px solid #e0e0e0;'>
+        <h4 style='margin-top:0;margin-bottom:1rem;'>📦 Export / Download Options</h4>
+        """, unsafe_allow_html=True)
+        col1, col2 = st.columns(2)
+        with col1:
+            st.download_button(
+                label="🗂️ Original Code",
+                data=st.session_state.original_code,
+                file_name=f"original_{st.session_state.selected_file['name']}",
+                mime="text/plain",
+                use_container_width=True
+            )
+            st.download_button(
+                label="📝 Refactored Code",
+                data=st.session_state.refactored_code,
+                file_name=f"refactored_{st.session_state.selected_file['name']}",
+                mime="text/plain",
+                use_container_width=True
+            )
+        with col2:
+            diff = difflib.unified_diff(
+                st.session_state.original_code.splitlines(),
+                st.session_state.refactored_code.splitlines(),
+                fromfile='Original',
+                tofile='Refactored',
+                lineterm=''
+            )
+            diff_text = '\n'.join(diff)
+            st.download_button(
+                label="🧩 Diff as Patch",
+                data=diff_text,
+                file_name=f"diff_{st.session_state.selected_file['name']}.patch",
+                mime="text/x-diff",
+                use_container_width=True
+            )
+            summary_text = summary if 'summary' in locals() else ''
+            before_metrics = st.session_state.refactoring_history[-1]['before_metrics'] if st.session_state.refactoring_history else {}
+            after_metrics = st.session_state.refactoring_history[-1]['after_metrics'] if st.session_state.refactoring_history else {}
+            report_md = f"""
+# Refactoring Report for {st.session_state.selected_file['name']}
+
+## Enhanced Summary
+{summary_text}
+
+## Metrics Before
+```
+{before_metrics}
+```
+## Metrics After
+```
+{after_metrics}
+```
+## Original Code
+```java
+{st.session_state.original_code}
+```
+## Refactored Code
+```java
+{st.session_state.refactored_code}
+```
+## Unified Diff
+```diff
+{diff_text}
+```
+"""
+            st.download_button(
+                label="📄 Refactoring Report (Markdown)",
+                data=report_md,
+                file_name=f"refactoring_report_{st.session_state.selected_file['name']}.md",
+                mime="text/markdown",
+                use_container_width=True
+            )
+        st.markdown("</div>", unsafe_allow_html=True)
 
 def render_testing_tab():
     """Render the Testing & Metrics tab content with JUnit integration."""
