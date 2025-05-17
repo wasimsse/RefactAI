@@ -1536,8 +1536,7 @@ def render_detection_tab():
         st.info("No external dependencies detected in this file.")
 
 def render_refactoring_tab():
-    # Persistent debug for refactoring_step
-    st.write('DEBUG: refactoring_step at entry', st.session_state.get('refactoring_step'))
+    # Remove debug print
     dependencies = set()  # Always initialize at the top to avoid UnboundLocalError
     st.title("Code Refactoring")
     # Initialize session state variables
@@ -1783,7 +1782,7 @@ def render_refactoring_tab():
 
     # Step 3: Pattern Selection
     elif current_step == 3:
-        st.write('DEBUG: Step 3')
+        # Remove debug print
         st.markdown("### Choose Refactoring Patterns")
         st.caption("Select the refactoring patterns to apply based on the analysis.")
         detected_smells = st.session_state.detected_smells
@@ -1821,7 +1820,7 @@ def render_refactoring_tab():
                 st.rerun()
     # Step 4: Preview Changes
     elif current_step == 4:
-        st.write('DEBUG: Step 4')
+        # Remove debug print
         st.markdown("### 👀 Preview Changes")
         st.caption("Review the proposed changes before applying them.")
         # --- LLM Ripple Impact Assessment ---
@@ -2089,8 +2088,7 @@ def render_testing_tab():
 
 def main():
     """Main function to run the Streamlit dashboard."""
-    # Persistent session state debug at the very top
-    st.write("DEBUG: session_state at top of main()", st.session_state)
+    # Remove debug print
     # Store current tab in session state
     if "current_tab" not in st.session_state:
         st.session_state.current_tab = "Home"
