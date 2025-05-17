@@ -19,7 +19,6 @@ from contextlib import contextmanager
 from smell_detector.detector import detect_smells
 from refactoring.file_utils import RefactoringFileManager
 import difflib
-import html
 import pandas as pd
 from gptlab_test import gptlab_chat, MODEL_OPTIONS  # Import what we need from gptlab_test
 from refactoring.engine import RefactoringEngine
@@ -37,6 +36,7 @@ from dependency_utils import find_java_dependencies
 from dependency_utils import dependency_bar_chart
 from dependency_utils import dependency_network_chart
 import networkx as nx
+from streamlit.components.v1 import html
 # Configure root logger
 logging.basicConfig(
     level=logging.INFO,
@@ -333,191 +333,123 @@ class ProjectManager:
                     self.project_metadata["file_count"] += 1
                     self.project_metadata["total_size"] += file_size
 
-class ModelManager:
-    """Manages LLM model loading and inference with hardware optimization."""
-    
-    def __init__(self):
-        self.model = None
-        self.tokenizer = None
-        self.model_name = None
-        self.device = "cpu"
-        self.memory_config = {}
-        self.logger = logging.getLogger(__name__)
-        self.resource_monitor = ResourceMonitor()
-        self.engine = RefactoringEngine()
-        self.model_loaded = False
-        self.current_model = None
-    
-    def load_model(self, model_name: str, source: str = "LOCAL", api_key: Optional[str] = None) -> Tuple[bool, Optional[str]]:
-        """Load a model from the specified source."""
-        try:
-            self.logger.info(f"Loading model {model_name} from {source}")
-            
-            # Check if model is already loaded
-            if self.model_loaded and self.current_model and self.current_model["name"] == model_name:
-                self.logger.info("Model already loaded")
-                return True, None
-            
-            # Check resources before loading
-            if not self.resource_monitor.check_resources():
-                error_msg = "Insufficient resources for model loading"
-                self.logger.error(error_msg)
-                return False, error_msg
-            
-            # Load model with resource monitoring
-            with self.resource_monitor.monitor_loading():
-                success, error = self.engine.load_model(
-                    source=source,
-                    model_name=model_name,
-                    api_key=api_key,
-                    device=self.device,
-                    **self.memory_config
-                )
-            
-            if success:
-                self.model_loaded = True
-                self.current_model = {
-                    "name": model_name,
-                    "source": source,
-                    "device": self.device
-                }
-                self.logger.info(f"Model {model_name} loaded successfully")
-                return True, None
-            else:
-                self.logger.error(f"Failed to load model: {error}")
-                return False, error
-            
-        except Exception as e:
-            error_msg = f"Error loading model: {str(e)}"
-            self.logger.error(error_msg)
-            return False, error_msg
-    
-    def generate_refactoring(self, code: str, smells: List[str], model: str = None) -> Tuple[str, Dict]:
-        """Generate refactored code using the loaded model with resource monitoring."""
-        if not self.model_loaded:
-            raise RuntimeError("No model loaded. Please load a model first.")
-        
-        try:
-            # Check resources before generation
-            if not self.resource_monitor.check_resources():
-                raise RuntimeError("Insufficient resources for code generation")
-            
-            self.logger.info(f"Starting code refactoring with model {self.current_model['name']}")
-            self.logger.info(f"Code smells to address: {smells}")
-            
-            # Generate with resource monitoring
-            with self.resource_monitor.monitor_generation():
-                refactored_code, metadata = self.engine.refactor_code(code, smells, model)
-            
-            # Add resource usage to metadata
-            metadata["resource_usage"] = self.resource_monitor.get_generation_stats()
-            self.logger.info("Code refactoring completed successfully")
-            return refactored_code, metadata
-            
-        except Exception as e:
-            error_msg = f"Error during refactoring: {str(e)}"
-            self.logger.error(error_msg)
-            st.error(error_msg)
-            return code, {"error": str(e), "success": False}
+# List of all Ollama/GPT-Lab endpoints
+GPTLAB_ENDPOINTS = [
+    {"name": "GPU-farmi-001", "url": "https://gptlab.rd.tuni.fi/GPT-Lab/resources/GPU-farmi-001/", "hardware": "1xP40 + 1xL4"},
+    {"name": "Otula-P40-L4", "url": "https://gptlab.rd.tuni.fi/GPT-Lab/resources/Otula-P40-L4/", "hardware": "1xP40 + 1xL4 (alias)"},
+    {"name": "GPU-farmi-002", "url": "https://gptlab.rd.tuni.fi/GPT-Lab/resources/GPU-farmi-002/", "hardware": "1xP40"},
+    {"name": "CSC-P100", "url": "https://gptlab.rd.tuni.fi/GPT-Lab/resources/CSC-P100/", "hardware": "1xP100"},
+    {"name": "RANDOM", "url": "https://gptlab.rd.tuni.fi/GPT-Lab/resources/RANDOM/", "hardware": "Proxy/Random"}
+]
+GPTLAB_BEARER_TOKEN = "sk-ollama-gptlab-6cc87c9bd38b24aca0fe77f0c9c4d68d"
 
-class ResourceMonitor:
-    """Monitors and manages system resources."""
+class ModelManager:
+    """Manages LLM models, their status, and performance across all endpoints."""
     def __init__(self):
-        self.start_time = time.time()
-        self.generation_stats = {}
-        self.loading_stats = {}
-    
-    def check_resources(self) -> bool:
-        """Check if sufficient resources are available."""
-        import psutil
-        
-        # Check memory
-        mem = psutil.virtual_memory()
-        if mem.available < 2 * 1024 * 1024 * 1024:  # 2GB minimum
-            return False
-        
-        # Check CPU usage
-        if psutil.cpu_percent(interval=1) > 90:
-            return False
-        
-        return True
-    
-    def update_usage(self):
-        """Update current resource usage statistics."""
-        import psutil
-        import torch
-        
-        self.current_usage = {
-            "memory": psutil.virtual_memory().percent,
-            "cpu": psutil.cpu_percent(),
-            "gpu": self._get_gpu_usage()
-        }
-    
-    def _get_gpu_usage(self) -> Dict[str, float]:
-        """Get GPU memory usage based on available hardware."""
-        try:
-            if torch.cuda.is_available():
-                return {
-                    "allocated": torch.cuda.memory_allocated() / 1024**3,
-                    "cached": torch.cuda.memory_reserved() / 1024**3
-                }
-            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                # Note: MPS doesn't provide direct memory stats
-                return {"mps": "active"}
-        except:
-            pass
-        return {}
-    
-    @contextmanager
-    def monitor_loading(self):
-        """Context manager to monitor resource usage during model loading."""
-        start_time = time.time()
-        start_memory = psutil.virtual_memory().used
-        
-        try:
-            yield
-        finally:
-            end_time = time.time()
-            end_memory = psutil.virtual_memory().used
-            
-            self.loading_stats = {
-                "duration": end_time - start_time,
-                "memory_delta": (end_memory - start_memory) / 1024**2,  # MB
-                "peak_memory": psutil.virtual_memory().percent
-            }
-    
-    @contextmanager
-    def monitor_generation(self):
-        """Context manager to monitor resource usage during generation."""
-        start_time = time.time()
-        start_memory = psutil.virtual_memory().used
-        
-        try:
-            yield
-        finally:
-            end_time = time.time()
-            end_memory = psutil.virtual_memory().used
-            
-            self.generation_stats = {
-                "duration": end_time - start_time,
-                "memory_delta": (end_memory - start_memory) / 1024**2,  # MB
-                "peak_memory": psutil.virtual_memory().percent
-            }
-    
-    def get_memory_usage(self) -> Dict[str, float]:
-        """Get current memory usage statistics."""
-        return {
-            "system": psutil.virtual_memory().percent,
-            "gpu": self._get_gpu_usage()
-        }
-    
-    def get_generation_stats(self) -> Dict[str, float]:
-        """Get statistics from the last generation."""
-        return self.generation_stats
-    
-    def get_loading_stats(self) -> Dict[str, float]:
-        """Get statistics from the last model loading."""
-        return self.loading_stats
+        self.models = []  # List of dicts: {name, endpoint, hardware, status, ...}
+        self.last_refresh = 0
+        self.refresh_interval = 300  # seconds
+        self.current_model = None  # (model_name, endpoint_url)
+        self.model_metrics = {}  # (model_name, endpoint_url): metrics
+        self.refresh_models()
+
+    def refresh_models(self, force=False):
+        """Query all endpoints for available models and update self.models."""
+        now = time.time()
+        if not force and now - self.last_refresh < self.refresh_interval:
+            return
+        self.models = []
+        self.endpoint_debug = []  # Collect diagnostics for UI
+        for ep in GPTLAB_ENDPOINTS:
+            if not isinstance(ep, dict):
+                logger.warning(f"Skipping invalid endpoint entry (not a dict): {ep}")
+                continue
+            try:
+                url = ep["url"].rstrip("/") + "/models"
+                resp = requests.get(url, headers={"Authorization": f"Bearer {GPTLAB_BEARER_TOKEN}"}, timeout=10)
+                debug_info = {"endpoint": ep["url"], "hardware": ep["hardware"], "status_code": resp.status_code}
+                if resp.status_code == 200:
+                    data = resp.json()
+                    debug_info["model_count"] = len(data.get("models", []))
+                    debug_info["raw_response"] = data
+                    for m in data.get("models", []):
+                        self.models.append({
+                            "name": m["name"] if isinstance(m, dict) else m,
+                            "endpoint": ep["url"],
+                            "hardware": ep["hardware"],
+                            "status": "available",  # Assume available if listed
+                            "provider": "GPT-Lab"
+                        })
+                else:
+                    debug_info["error"] = resp.text
+                self.endpoint_debug.append(debug_info)
+            except Exception as e:
+                logger.warning(f"Could not query models from {ep['url']}: {e}")
+                self.endpoint_debug.append({"endpoint": ep["url"], "hardware": ep["hardware"], "error": str(e)})
+        self.last_refresh = now
+
+    def get_available_models(self):
+        """Return all available models as a list of dicts."""
+        self.refresh_models()
+        return self.models
+
+    def select_model(self):
+        """Render model selection UI and return (model_name, endpoint_url)."""
+        models = self.get_available_models()
+        if not models:
+            if st.button("🔄 Refresh Models", key="refresh_models_btn"):
+                self.refresh_models(force=True)
+                st.rerun()
+            st.error("No models are currently available. Please try again later.")
+            # Show endpoint diagnostics
+            if hasattr(self, 'endpoint_debug') and self.endpoint_debug:
+                with st.expander("Endpoint Diagnostics", expanded=True):
+                    for dbg in self.endpoint_debug:
+                        st.write(f"Endpoint: {dbg.get('endpoint')} | Hardware: {dbg.get('hardware')}")
+                        st.write(f"Status Code: {dbg.get('status_code', 'N/A')}")
+                        if 'model_count' in dbg:
+                            st.write(f"Models Found: {dbg['model_count']}")
+                        if 'error' in dbg:
+                            st.write(f"Error: {dbg['error']}")
+                        if 'raw_response' in dbg:
+                            st.write(f"Raw Response: {dbg['raw_response']}")
+                        st.markdown('---')
+            return None
+        # Group by endpoint/hardware
+        group_labels = {}
+        for m in models:
+            label = f"{m['hardware']} ({m['endpoint'].split('/')[-2]})"
+            group_labels.setdefault(label, []).append(m)
+        st.markdown("#### Select LLM Model for Refactoring")
+        if st.button("🔄 Refresh Models", key="refresh_models_btn2"):
+            self.refresh_models(force=True)
+            st.rerun()
+        if not group_labels:
+            st.error("No models are available from any endpoint. Please try again later or check your endpoints.")
+            return None
+        group = st.selectbox("Endpoint/Hardware", list(group_labels.keys()), key="model_group_select")
+        model_options = group_labels[group]
+        model_display = [f"{m['name']}" for m in model_options]
+        idx = 0
+        selected = st.selectbox("Select Model", model_display, key="model_select")
+        selected_model = next((m for m in model_options if m['name'] == selected), None)
+        if selected_model:
+            self.current_model = (selected_model['name'], selected_model['endpoint'])
+            return self.current_model
+        return None
+
+    def update_model_metrics(self, model_key, success, response_time):
+        """Update metrics for a model (model_name, endpoint_url)."""
+        if model_key not in self.model_metrics:
+            self.model_metrics[model_key] = {"total_calls": 0, "success_rate": 0, "avg_response_time": 0, "error_count": 0}
+        m = self.model_metrics[model_key]
+        m["total_calls"] += 1
+        if success:
+            m["success_rate"] = ((m["success_rate"] * (m["total_calls"] - 1)) + 100) / m["total_calls"]
+        else:
+            m["error_count"] += 1
+            m["success_rate"] = ((m["success_rate"] * (m["total_calls"] - 1))) / m["total_calls"]
+        m["avg_response_time"] = ((m["avg_response_time"] * (m["total_calls"] - 1)) + response_time) / m["total_calls"]
 
 # Initialize session state
 if 'project_manager' not in st.session_state:
@@ -823,8 +755,14 @@ def render_home_tab():
     # Status and Metrics
     col1, col2, col3 = st.columns(3)
     with col1:
-        model_status = "Active ✅" if st.session_state.model_manager.model_loaded else "Inactive ❌"
-        model_name = st.session_state.model_manager.current_model.get("name") if st.session_state.model_manager.current_model else "No model loaded"
+        mm = st.session_state.model_manager
+        current_model = mm.current_model
+        if current_model and mm.models.get(current_model, {}).get("status") == "available":
+            model_status = "Active ✅"
+            model_name = current_model
+        else:
+            model_status = "Inactive ❌"
+            model_name = current_model if current_model else "No model loaded"
         st.metric(
             label="Model Status",
             value=model_status,
@@ -1861,7 +1799,7 @@ Will this refactoring have any unintended effects on the associated files/classe
                     prompt=llm_ripple_prompt,
                     model=model_to_use,
                     temperature=0.2,
-                    max_tokens=512
+                    max_tokens=2048
                 )
                 st.markdown("#### 🤖 LLM Ripple Impact Assessment")
                 st.info(llm_ripple_response)
@@ -1880,116 +1818,177 @@ Will this refactoring have any unintended effects on the associated files/classe
             # Model selection for refactoring (under Preview Changes)
             st.markdown("#### Select LLM Model for Refactoring")
             selected_model = st.selectbox(
-                "Choose a model:",
+                "Choose a GPT-Lab Model:",
                 GPTLAB_MODELS,
+                index=GPTLAB_MODELS.index(st.session_state.get('selected_model', GPTLAB_MODELS[0])) if st.session_state.get('selected_model') in GPTLAB_MODELS else 0,
                 key="refactoring_model_preview",
-                help="Choose which LLM to use for this refactoring",
-                index=GPTLAB_MODELS.index(st.session_state.get('selected_model', GPTLAB_MODELS[0])) if st.session_state.get('selected_model') in GPTLAB_MODELS else 0
+                help="Choose which LLM to use for this refactoring"
             )
             # Always update the session state with the selected model
             if st.session_state.get('selected_model') != selected_model:
                 st.session_state['selected_model'] = selected_model
                 st.rerun()
             model_to_use = st.session_state['selected_model']
-            rerun_refactor = False
-            if 'last_refactored_model' not in st.session_state or st.session_state['last_refactored_model'] != model_to_use:
-                st.session_state['last_refactored_model'] = model_to_use
-                # Generate refactored code
-                with st.spinner("Generating refactored code..."):
-                    # Add instruction for additional smell detection if requested
-                    additional_instructions = ""
-                    if st.session_state.get('detect_more_smells', False):
-                        additional_instructions = """
-                        Please analyze the code for additional code smells beyond the automated detection.
-                        Consider:
-                        1. Design patterns that could be applied
-                        2. Potential performance improvements
-                        3. Security considerations
-                        4. Best practices violations
-                        """
-                    # Build the refactoring prompt
-                    refactoring_prompt = f"""
-Scope Limitation (Local-Only Refactoring):
-- All refactoring must be confined to this single file only.
-- Do not rename or modify any class, interface, or method signatures (names, visibility, parameters, return types) that might affect other classes or files.
-- Do not assume or modify the behavior of any external dependencies or imported packages.
-
-Refactoring Goals:
-- Focus strictly on improving code readability, reducing duplication, simplifying logic, or removing code smells that are purely internal to this file.
-- Acceptable refactorings include:
-  - Breaking large methods into smaller helper methods (as private and local).
-  - Extracting constants or simplifying logic within methods.
-  - Minor structure enhancements that do not affect API or external usage.
-
-Avoid Ripple Effects:
-- Any refactoring that would require changes to other files, external test classes, subclasses, or libraries is strictly disallowed.
-- Do not introduce new public classes or methods, or remove existing ones unless they are provably unused and internal.
-
-No Additions Beyond Scope:
-- Do not add extra comments, logging, or architectural patterns unless directly tied to a refactoring need.
-- Avoid speculative or anticipatory code changes (e.g., design patterns, future-proofing).
-
-Preserve Behavior and Structure:
-- The functional behavior of the file must remain 100% unchanged.
-- Preserve the current class structure, hierarchy, and all public interfaces.
-- Maintain compatibility with any known external tests or calling code.
-
-Before applying each change, assess whether the refactoring introduces indirect dependencies or risks cascading changes across the codebase. If it does, skip it.
-
-Apply the following refactoring patterns: {', '.join(selected_patterns)}. {st.session_state.user_instructions}\n{additional_instructions}
-
-Output ONLY the refactored code. Do NOT include any explanations, summaries, or markdown blocks. No comments or extra text—just the code.
-"""
-                    # Debug output in expander
-                    with st.expander("🔍 Debug: Refactoring LLM Call", expanded=False):
-                        st.markdown(f"**Model:** `{model_to_use}`")
-                        st.markdown("**Prompt sent to LLM:**")
-                        st.code(refactoring_prompt, language="markdown")
+            # Generate refactored code
+            with st.spinner("Generating refactored code..."):
+                start_time = time.time()
+                try:
                     refactored_code, metadata = generate_refactoring(
                         st.session_state.original_code,
                         st.session_state.selected_patterns,
                         st.session_state.detected_smells,
-                        st.session_state.user_instructions + "\n" + additional_instructions
+                        st.session_state.user_instructions
                     )
+                    # Debug: Show raw LLM output and metadata
+                    # Removed: with st.expander("🔍 Debug: Raw LLM Output & Metadata", expanded=False):
+                    #     st.markdown("**Raw LLM Output:**")
+                    #     st.code(refactored_code, language="text")
+                    #     st.markdown("**Metadata / API Response:**")
+                    #     st.json(metadata)
+
+                    # --- Side-by-side GitHub-style diff viewer ---
+                    import difflib
+                    from streamlit.components.v1 import html
+
+                    original_code = st.session_state.original_code
+                    refactored_code_str = refactored_code if isinstance(refactored_code, str) else ""
+
+                    # --- If output is suspiciously short, show a warning and a Continue button ---
+                    min_length = 100  # You can adjust this threshold
+                    if len(refactored_code_str.strip()) < min_length:
+                        st.warning("⚠️ The refactored code output appears to be incomplete or too short. Try increasing max_tokens, shortening the file, or click below to continue generation.")
+                        if st.button("Continue Generation", key="continue_generation_btn"):
+                            st.info("Feature not implemented: You can manually copy the code and ask the LLM to continue from here.")
+
+                    # Compute diff
+                    diff = list(difflib.unified_diff(
+                        original_code.splitlines(),
+                        refactored_code_str.splitlines(),
+                        fromfile='Original',
+                        tofile='Refactored',
+                        lineterm=''
+                    ))
+
+                    # --- Post-refactoring analyzer ---
+                    def analyze_diff(orig, refac):
+                        import re
+                        orig_lines = orig.splitlines()
+                        refac_lines = refac.splitlines()
+                        d = difflib.Differ()
+                        diff_lines = list(d.compare(orig_lines, refac_lines))
+                        inserted, deleted, changed, changed_lines = 0, 0, 0, []
+                        for i, line in enumerate(diff_lines):
+                            if line.startswith('+ '):
+                                inserted += 1
+                                changed_lines.append(i)
+                            elif line.startswith('- '):
+                                deleted += 1
+                                changed_lines.append(i)
+                            elif line.startswith('? '):
+                                changed += 1
+                                changed_lines.append(i)
+                        # Find changed classes/methods (simple regex)
+                        class_changes = set()
+                        method_changes = set()
+                        for i in changed_lines:
+                            context = diff_lines[max(0, i-3):i+3]
+                            for l in context:
+                                m = re.search(r'class\s+(\w+)', l)
+                                if m:
+                                    class_changes.add(m.group(1))
+                                m2 = re.search(r'(public|private|protected)?\s*(static)?\s*\w+\s+(\w+)\s*\(', l)
+                                if m2:
+                                    method_changes.add(m2.group(3))
+                        return {
+                            'inserted': inserted,
+                            'deleted': deleted,
+                            'changed': changed,
+                            'changed_lines': sorted(set(changed_lines)),
+                            'class_changes': sorted(class_changes),
+                            'method_changes': sorted(method_changes)
+                        }
+                    analysis = analyze_diff(original_code, refactored_code_str)
+
+                    # GitHub-style diff HTML
+                    def github_diff_html(diff_lines):
+                        html_lines = [
+                            '<style>\n.diff-table {width:100%;border-collapse:collapse;font-family:monospace;font-size:0.95em;}\n.diff-table td, .diff-table th {padding:2px 8px;}\n.diff-table tr.added {background:#e6ffed;}\n.diff-table tr.removed {background:#ffeef0;}\n.diff-table tr.context {background:#f6f8fa;}\n.diff-table tr.header {background:#f6f8fa;font-weight:bold;}\n</style>',
+                            '<table class="diff-table">'
+                        ]
+                        for line in diff_lines:
+                            if line.startswith('+++') or line.startswith('---'):
+                                html_lines.append(f'<tr class="header"><td colspan="2">{line}</td></tr>')
+                            elif line.startswith('@@'):
+                                html_lines.append(f'<tr class="context"><td colspan="2"><b>{line}</b></td></tr>')
+                            elif line.startswith('+'):
+                                html_lines.append(f'<tr class="added"><td style="color:#22863a;">+</td><td>{line[1:]}</td></tr>')
+                            elif line.startswith('-'):
+                                html_lines.append(f'<tr class="removed"><td style="color:#cb2431;">-</td><td>{line[1:]}</td></tr>')
+                            else:
+                                html_lines.append(f'<tr><td></td><td>{line}</td></tr>')
+                        html_lines.append('</table>')
+                        return '\n'.join(html_lines)
+
+                    st.markdown("### 📝 Before & After Refactoring (GitHub-style Diff)")
+                    col1, col2 = st.columns(2)
+                    try:
+                        from streamlit_ace import st_ace
+                        ace_available = True
+                    except ImportError:
+                        ace_available = False
+                    with col1:
+                        st.markdown("**Original Code**")
+                        if ace_available:
+                            st_ace(value=original_code, language="java", theme="github", readonly=True, show_gutter=True, key="orig_ace")
+                        else:
+                            st.code(original_code, language="java")
+                            st.info("Install streamlit-ace for a VS Code-like editor with line numbers.")
+                    with col2:
+                        st.markdown("**Refactored Code (with highlights)**")
+                        if ace_available:
+                            # Highlight changed lines in refactored code
+                            changed_line_set = set(l+1 for l in analysis['changed_lines'])
+                            markers = [
+                                {"startRow": i-1, "endRow": i-1, "className": "ace-changed-line", "type": "fullLine"}
+                                for i in changed_line_set
+                            ]
+                            st_ace(
+                                value=refactored_code_str,
+                                language="java",
+                                theme="github",
+                                readonly=True,
+                                show_gutter=True,
+                                key="refac_ace",
+                                markers=markers,
+                                wrap=True,
+                                height=400
+                            )
+                            st.markdown("<style>.ace-changed-line {background-color: #fffbe6 !important;}</style>", unsafe_allow_html=True)
+                            st.caption("<span style='background-color:#fffbe6;padding:2px 8px;border-radius:4px;'>Highlighted lines</span> = changed/inserted lines", unsafe_allow_html=True)
+                        else:
+                            st.code(refactored_code_str, language="java")
+                            st.info("Install streamlit-ace for a VS Code-like editor with line numbers and highlights.")
+
+                    # Show colored diff below
+                    st.markdown("#### <span style='color:#6f42c1'>Diff Highlight</span>", unsafe_allow_html=True)
+                    html(github_diff_html(diff), height=400)
+
+                    # --- Post-refactoring summary ---
+                    st.markdown("### 📝 Post-Refactoring Change Summary")
+                    st.info(f"**Classes changed:** {', '.join(analysis['class_changes']) if analysis['class_changes'] else 'None'}")
+                    st.info(f"**Methods changed:** {', '.join(analysis['method_changes']) if analysis['method_changes'] else 'None'}")
+                    st.info(f"**Lines inserted:** {analysis['inserted']} | **Lines deleted:** {analysis['deleted']} | **Other changes:** {analysis['changed']}")
+                    st.info(f"**Changed line numbers:** {', '.join(str(l+1) for l in analysis['changed_lines']) if analysis['changed_lines'] else 'None'}")
+                    st.success("Review the above summary to understand exactly what was changed in your code.")
+
+                    if not metadata.get('success', False):
+                        st.error(f"Refactoring failed: {metadata.get('reason', 'Unknown error')}")
+                        st.stop()
                     st.session_state.refactored_code = refactored_code
                     st.session_state.refactoring_metadata = metadata
-            # --- Extract and display Change Summary ---
-            def extract_change_summary(llm_output):
-                import re
-                # Remove code block markers and extract summary
-                # Match code block with 'Change Summary' or 'Changes Made' or 'Changes:'
-                pattern = re.compile(
-                    r"```[^\n]*\n\s*(\*\*Change(?:s)? (?:Made|Summary)\*\*|Changes:)[\s\S]+?```",
-                    re.IGNORECASE
-                )
-                match = pattern.search(llm_output)
-                if match:
-                    summary_block = match.group(0)
-                    # Remove the code block from the code output
-                    code_without_summary = llm_output.replace(summary_block, '').strip()
-                    # Remove the code block markers for display
-                    summary = re.sub(r"^```[^\n]*\n?|```$", "", summary_block, flags=re.MULTILINE).strip()
-                    return summary, code_without_summary
-                else:
-                    # Fallback: try to match summary outside code block
-                    match2 = re.search(r"(\*\*Change(?:s)? (?:Made|Summary)\*\*|Changes:)[\s\S]+", llm_output, re.IGNORECASE)
-                    if match2:
-                        summary = match2.group(0).strip()
-                        code_without_summary = llm_output.replace(match2.group(0), '').strip()
-                        return summary, code_without_summary
-                    return None, llm_output
-            if st.session_state.refactored_code:
-                # Debug: Show raw LLM output
-                with st.expander("🔍 Debug: Raw LLM Output", expanded=False):
-                    st.code(st.session_state.refactored_code, language="text")
-                render_refactoring_preview(st.session_state.original_code, st.session_state.refactored_code, llm_reasoning=None)
-                summary = None
-                if st.session_state.refactoring_metadata and 'change_summary' in st.session_state.refactoring_metadata:
-                    summary = st.session_state.refactoring_metadata['change_summary']
-                if summary:
-                    st.markdown("### 📝 Change Summary")
-                    st.markdown(summary)
-                # ... (verification and navigation logic as before) ...
+                except Exception as e:
+                    st.error(f"Error during refactoring: {str(e)}")
+                    st.stop()
 
     # Step 5: Apply Refactoring
     elif current_step == 5:
@@ -2318,7 +2317,7 @@ def analyze_code_smells(content: str) -> dict:
 
 def generate_refactoring(original_code, selected_patterns, detected_smells, user_instructions):
     """
-    Generate refactored code using GPT-Lab or local LLM.
+    Generate refactored code using GPT-Lab LLM only (cloud models only).
     Returns (refactored_code, metadata).
     """
     if not selected_patterns:
@@ -2354,7 +2353,7 @@ Before applying each change, assess whether the refactoring introduces indirect 
 
 Apply the following refactoring patterns: {', '.join(selected_patterns)}. {user_instructions}
 
-Output ONLY the refactored code. Do NOT include any explanations, summaries, or markdown blocks. No comments or extra text—just the code.
+Output ONLY the refactored Java code. Do NOT include any markdown, code fences, explanations, or comments. Only output valid Java code.
 """
     try:
         # Only allow GPT-Lab/cloud models
@@ -2369,32 +2368,25 @@ Output ONLY the refactored code. Do NOT include any explanations, summaries, or 
             st.error(f"Selected model '{model_to_use}' is not a supported GPT-Lab model. Please select a valid GPT-Lab model.")
             return original_code, {"success": False, "reason": f"Model '{model_to_use}' is not a supported GPT-Lab model."}
         # Always use GPT-Lab API for LLM calls
-        # For local models, check if model is loaded in Ollama
-        if backend == "local":
-            try:
-                import requests
-                response = requests.get("http://localhost:11434/api/tags")
-                if response.status_code == 200:
-                    tags = response.json().get("models", [])
-                    available_models = [m["name"] for m in tags]
-                    if model_to_use not in available_models:
-                        st.error(f"Local model '{model_to_use}' is not loaded in Ollama. Please load it or select a cloud model.")
-                        return original_code, {"success": False, "reason": f"Model '{model_to_use}' not loaded in Ollama."}
-                else:
-                    st.error("Could not connect to Ollama to check local models.")
-                    return original_code, {"success": False, "reason": "Ollama not reachable."}
-            except Exception as e:
-                st.error(f"Error checking Ollama models: {e}")
-                return original_code, {"success": False, "reason": str(e)}
-        # Now proceed with LLM calls as before
         # 1. Generate refactored code ONLY
         refactored_code = refactor_with_gptlab(
             code=original_code,
             model_name=model_to_use,
             smell_analysis=detected_smells,
             additional_instructions=code_instructions,
-            temperature=st.session_state.get('refactoring_sidebar_temperature', 0.3)
+            temperature=st.session_state.get('refactoring_sidebar_temperature', 0.3),
+            max_tokens=2048
         )
+        # --- Post-process: Remove code fences and extra text ---
+        import re
+        def extract_java_code(text):
+            # Remove code fences and explanations
+            code = re.sub(r'^```[a-zA-Z]*', '', text.strip())
+            code = re.sub(r'```$', '', code.strip())
+            # Remove any leading/trailing explanations
+            code = re.sub(r'(?s)^.*?(public|class|package) ', r'\1 ', code)
+            return code.strip()
+        refactored_code_clean = extract_java_code(refactored_code)
         # 2. Generate change summary as a separate LLM call
         summary_prompt = f"""
 Given the following original code and its refactored version, provide a concise markdown-formatted 'Change Summary' listing each pattern applied and a short description of what was changed. Do NOT include any code, only the summary.
@@ -2403,16 +2395,16 @@ Original code:
 {original_code}
 
 Refactored code:
-{refactored_code}
+{refactored_code_clean}
 """
         from gptlab_integration import gptlab_chat
         change_summary = gptlab_chat(
             prompt=summary_prompt,
             model=model_to_use,
             temperature=0.2,
-            max_tokens=256
+            max_tokens=2048
         )
-        return refactored_code, {"success": True, "patterns": selected_patterns, "change_summary": change_summary}
+        return refactored_code_clean, {"success": True, "patterns": selected_patterns, "change_summary": change_summary}
     except Exception as e:
         return original_code, {"success": False, "reason": str(e)}
 
