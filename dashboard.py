@@ -37,6 +37,8 @@ from dependency_utils import dependency_bar_chart
 from dependency_utils import dependency_network_chart
 import networkx as nx
 from streamlit.components.v1 import html
+import subprocess
+
 # Configure root logger
 logging.basicConfig(
     level=logging.INFO,
@@ -1869,6 +1871,34 @@ Will this refactoring have any unintended effects on the associated files/classe
                         lineterm=''
                     ))
 
+                    # --- Robustly get changed/added line numbers in refactored code from unified diff ---
+                    def get_changed_lines_in_refactored(diff_lines):
+                        changed_lines = set()
+                        orig_line = None
+                        ref_line = None
+                        for line in diff_lines:
+                            if line.startswith('@@'):
+                                # Example: @@ -1,7 +1,8 @@
+                                import re
+                                m = re.match(r'@@ -(\d+)(?:,\d+)? \+(\d+)(?:,(\d+))? @@', line)
+                                if m:
+                                    orig_line = int(m.group(1)) - 1  # 0-based
+                                    ref_line = int(m.group(2)) - 1  # 0-based
+                                else:
+                                    orig_line = None
+                                    ref_line = None
+                            elif line.startswith('+') and not line.startswith('+++') and ref_line is not None:
+                                changed_lines.add(ref_line)
+                                ref_line += 1
+                            elif line.startswith('-') and not line.startswith('---') and orig_line is not None:
+                                orig_line += 1
+                            elif not line.startswith('---') and not line.startswith('+++') and ref_line is not None and orig_line is not None:
+                                # Context line
+                                orig_line += 1
+                                ref_line += 1
+                        return changed_lines
+                    changed_line_set = get_changed_lines_in_refactored(diff)
+
                     # --- Post-refactoring analyzer ---
                     def analyze_diff(orig, refac):
                         import re
@@ -1946,25 +1976,27 @@ Will this refactoring have any unintended effects on the associated files/classe
                     with col2:
                         st.markdown("**Refactored Code (with highlights)**")
                         if ace_available:
-                            # Highlight changed lines in refactored code
-                            changed_line_set = set(l+1 for l in analysis['changed_lines'])
-                            markers = [
-                                {"startRow": i-1, "endRow": i-1, "className": "ace-changed-line", "type": "fullLine"}
-                                for i in changed_line_set
+                            # Highlight changed lines in refactored code (from robust unified diff parser)
+                            debug_markers = [
+                                {"startRow": i, "endRow": i, "className": "ace-changed-line", "type": "fullLine"}
+                                for i in changed_line_set if i >= 0 and i < len(refactored_code_str.splitlines())
                             ]
+                            # Force highlight the first line for debugging
+                            debug_markers.append({"startRow": 0, "endRow": 0, "className": "ace-debug-line", "type": "fullLine"})
+                            st.info("Using 'chrome' theme for highlight debugging.")
                             st_ace(
                                 value=refactored_code_str,
                                 language="java",
-                                theme="github",
+                                theme="chrome",
                                 readonly=True,
                                 show_gutter=True,
                                 key="refac_ace",
-                                markers=markers,
+                                markers=debug_markers,
                                 wrap=True,
                                 height=400
                             )
-                            st.markdown("<style>.ace-changed-line {background-color: #fffbe6 !important;}</style>", unsafe_allow_html=True)
-                            st.caption("<span style='background-color:#fffbe6;padding:2px 8px;border-radius:4px;'>Highlighted lines</span> = changed/inserted lines", unsafe_allow_html=True)
+                            st.markdown("<style>.ace-changed-line, .ace_marker-layer .ace-changed-line {background-color: #fffbe6 !important;} .ace-debug-line, .ace_marker-layer .ace-debug-line {background-color: #ff00ff !important;}</style>", unsafe_allow_html=True)
+                            st.caption("<span style='background-color:#fffbe6;padding:2px 8px;border-radius:4px;'>Highlighted lines</span> = changed/inserted lines. <span style='background-color:#ff00ff;padding:2px 8px;border-radius:4px;'>Magenta = debug forced highlight (line 1)</span>", unsafe_allow_html=True)
                         else:
                             st.code(refactored_code_str, language="java")
                             st.info("Install streamlit-ace for a VS Code-like editor with line numbers and highlights.")
@@ -1978,7 +2010,6 @@ Will this refactoring have any unintended effects on the associated files/classe
                     st.info(f"**Classes changed:** {', '.join(analysis['class_changes']) if analysis['class_changes'] else 'None'}")
                     st.info(f"**Methods changed:** {', '.join(analysis['method_changes']) if analysis['method_changes'] else 'None'}")
                     st.info(f"**Lines inserted:** {analysis['inserted']} | **Lines deleted:** {analysis['deleted']} | **Other changes:** {analysis['changed']}")
-                    st.info(f"**Changed line numbers:** {', '.join(str(l+1) for l in analysis['changed_lines']) if analysis['changed_lines'] else 'None'}")
                     st.success("Review the above summary to understand exactly what was changed in your code.")
 
                     if not metadata.get('success', False):
@@ -1989,23 +2020,29 @@ Will this refactoring have any unintended effects on the associated files/classe
                 except Exception as e:
                     st.error(f"Error during refactoring: {str(e)}")
                     st.stop()
+            # Navigation buttons for step 4 (always visible after preview)
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("← Back to Pattern Selection", use_container_width=True, key="back_to_step3_btn"):
+                    st.session_state.refactoring_step = 3
+                    st.rerun()
+            with col2:
+                if st.button("Next: Apply Refactoring →", use_container_width=True, key="to_step5_btn"):
+                    st.session_state.refactoring_step = 5
+                    st.rerun()
 
     # Step 5: Apply Refactoring
     elif current_step == 5:
         st.markdown("### Apply Refactoring")
         st.caption("Apply the refactoring changes to your code.")
-        
         if not st.session_state.refactored_code:
             st.error("No refactored code available. Please go back and complete previous steps.")
             return
-        
         # Confirmation
         st.markdown("### Are you sure you want to apply these changes?")
         st.markdown("The following changes will be made:")
-        
         # Show changes summary
         render_refactoring_preview(st.session_state.original_code, st.session_state.refactored_code)
-        
         # Apply changes
         if st.button("Apply Changes", type="primary", use_container_width=True):
             try:
@@ -2013,7 +2050,6 @@ Will this refactoring have any unintended effects on the associated files/classe
                 file_path = Path(st.session_state.project_manager.project_path) / st.session_state.selected_file["path"]
                 with open(file_path, 'w') as f:
                     f.write(st.session_state.refactored_code)
-                
                 # Update history
                 st.session_state.refactoring_history.append({
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -2023,67 +2059,128 @@ Will this refactoring have any unintended effects on the associated files/classe
                     "before_metrics": calculate_basic_metrics(st.session_state.original_code),
                     "after_metrics": calculate_basic_metrics(st.session_state.refactored_code)
                 })
-                
                 st.success("Refactoring applied successfully!")
-                
                 # Reset workflow
                 st.session_state.refactoring_step = 1
                 st.rerun()
-                
             except Exception as e:
                 st.error(f"Error applying changes: {str(e)}")
-        
-        # Navigation buttons
-        if st.button("← Back to Preview", use_container_width=True):
-            st.session_state.refactoring_step = 4
-            st.rerun()
+        # Navigation buttons for step 5
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("← Back to Preview", use_container_width=True, key="back_to_step4_btn"):
+                st.session_state.refactoring_step = 4
+                st.rerun()
 
 def render_testing_tab():
-    """Render the Testing & Metrics tab content."""
+    """Render the Testing & Metrics tab content with JUnit integration."""
     st.title("Testing & Metrics")
-    
     if not st.session_state.project_manager.project_path:
         st.warning("Please upload a project first")
         return
-    
+    project_root = str(st.session_state.project_manager.project_path)
+    java_files = st.session_state.project_manager.project_metadata.get("java_files", [])
+    # Auto-generate test stubs if missing
+    created_tests = ensure_junit_tests_exist(project_root, java_files)
+    if created_tests:
+        st.info(f"Generated {len(created_tests)} JUnit test stubs for missing classes.")
     # Test Controls
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("▶️ Run Tests"):
-            # TODO: Implement real test running
-            st.success("Tests completed!")
-    with col2:
-        if st.button("📊 Generate Report"):
-            # TODO: Implement real report generation
-            st.success("Report generated!")
+    auto_run = st.toggle("Run tests automatically after refactoring", value=False, key="auto_run_tests_toggle")
+    run_now = st.button("▶️ Run Tests", key="run_tests_btn")
+    test_result = st.session_state.get("last_test_result", None)
+    if run_now or (auto_run and st.session_state.get("refactoring_step", 1) == 5 and st.session_state.get("refactored_code")):
+        with st.spinner("Running JUnit tests..."):
+            success, output = run_junit_tests(project_root)
+            st.session_state["last_test_result"] = (success, output)
+            test_result = (success, output)
+            # Parse test results
+            if output:
+                st.session_state["parsed_test_results"] = parse_test_results(output)
     
     # Metrics Display
     st.markdown("### Quality Metrics")
     metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
+    
+    # Display coverage metrics if available
+    coverage_metrics = st.session_state.get('coverage_metrics', {})
     with metrics_col1:
-        # TODO: Implement real metrics calculation
-        st.metric("Code Coverage", "78%", "+5%")
+        line_coverage = coverage_metrics.get('line_coverage', 0)
+        st.metric("Code Coverage", f"{line_coverage:.1f}%", 
+                 f"Branch: {coverage_metrics.get('branch_coverage', 0):.1f}% | Method: {coverage_metrics.get('method_coverage', 0):.1f}%")
+    
+    # Display test results
+    parsed_results = st.session_state.get("parsed_test_results", {})
     with metrics_col2:
-        st.metric("Complexity", "24", "-8")
+        total_tests = parsed_results.get('total_tests', 0)
+        passed_tests = parsed_results.get('passed_tests', 0)
+        if total_tests > 0:
+            pass_rate = (passed_tests / total_tests) * 100
+            st.metric("Test Pass Rate", f"{pass_rate:.1f}%", 
+                     f"{passed_tests}/{total_tests} tests passed")
+        else:
+            st.metric("Test Pass Rate", "N/A", "No tests run")
+    
     with metrics_col3:
-        st.metric("Maintainability", "A", "↑ from B")
+        execution_time = parsed_results.get('execution_time', 0)
+        st.metric("Test Execution Time", f"{execution_time:.2f}s", 
+                 f"Total tests: {total_tests}")
     
     # Test Results
     with st.expander("🔍 Test Results", expanded=True):
-        # TODO: Implement real test results display
-        st.markdown("""
-        UserManagerTest: 12/12 passed
-        DataServiceTest: 8/8 passed
-        UtilsTest: 5/5 passed
-        """)
+        if test_result:
+            success, output = test_result
+            if success:
+                st.success("All tests passed!")
+                
+                # Display detailed test results
+                if parsed_results:
+                    st.markdown("#### Test Summary")
+                    st.write(f"Total Tests: {parsed_results['total_tests']}")
+                    st.write(f"Passed: {parsed_results['passed_tests']}")
+                    st.write(f"Failed: {len(parsed_results['failed_tests'])}")
+                    st.write(f"Skipped: {len(parsed_results['skipped_tests'])}")
+                    st.write(f"Execution Time: {parsed_results['execution_time']:.2f}s")
+                    
+                    # Display coverage details
+                    if coverage_metrics:
+                        st.markdown("#### Coverage Details")
+                        coverage_data = {
+                            'Metric': ['Line', 'Branch', 'Method'],
+                            'Coverage': [
+                                coverage_metrics.get('line_coverage', 0),
+                                coverage_metrics.get('branch_coverage', 0),
+                                coverage_metrics.get('method_coverage', 0)
+                            ]
+                        }
+                        st.bar_chart(pd.DataFrame(coverage_data).set_index('Metric'))
+                
+                # Show full output in expandable section
+                with st.expander("View Full Test Output"):
+                    st.code(output[:2000])
+            else:
+                st.error("Some tests failed or could not run.")
+                
+                # Display failure details
+                if parsed_results and parsed_results['failures']:
+                    st.markdown("#### Failed Tests")
+                    for failure in parsed_results['failures']:
+                        with st.expander(f"❌ {failure['test']}"):
+                            st.error(failure['error'])
+                
+                # Show full output in expandable section
+                with st.expander("View Full Test Output"):
+                    st.code(output[:2000])
+        else:
+            st.info("No test results yet. Click 'Run Tests' to execute JUnit tests.")
     
     # Performance Comparison
     st.markdown("### Performance Comparison")
-    # TODO: Implement real performance metrics
-    st.line_chart({
-        "Before": [75, 82, 78, 85, 90],
-        "After": [85, 89, 88, 92, 95]
-    })
+    if parsed_results and 'execution_time' in parsed_results:
+        st.line_chart({
+            'Test Execution Time': [parsed_results['execution_time']]
+        })
+    else:
+        st.info("Run tests to see performance metrics.")
 
 def main():
     """Main function to run the Streamlit dashboard."""
@@ -2512,6 +2609,224 @@ def dependency_network_chart(current_file, dependencies):
     ))
     fig.update_layout(title="Dependency Network", showlegend=False, margin=dict(l=20, r=20, t=40, b=20))
     return fig
+
+# --- JUnit Test Utilities ---
+def find_junit_test_files(project_root):
+    """Return a list of all JUnit test files in the project."""
+    test_files = []
+    for root, _, files in os.walk(project_root):
+        for f in files:
+            if f.endswith('Test.java') or f.endswith('Tests.java'):
+                test_files.append(os.path.join(root, f))
+    return test_files
+
+def generate_junit_test_stub(java_file_path):
+    """Generate a basic JUnit test stub for a given Java file (if not present)."""
+    class_name = Path(java_file_path).stem
+    test_class_name = class_name + 'Test'
+    test_file_path = str(Path(java_file_path).parent / (test_class_name + '.java'))
+    if os.path.exists(test_file_path):
+        return None  # Already exists
+    # Basic JUnit 5 test stub
+    stub = f'''import org.junit.jupiter.api.Test;\npublic class {test_class_name} {{\n    @Test\n    public void testPlaceholder() {{\n        // TODO: Add real tests for {class_name}\n        assert true;\n    }}\n}}\n'''
+    with open(test_file_path, 'w') as f:
+        f.write(stub)
+    return test_file_path
+
+def ensure_junit_tests_exist(project_root, java_files):
+    """Ensure every class has a JUnit test file; generate stubs if missing."""
+    created = []
+    for file_info in java_files:
+        java_path = file_info["full_path"]
+        class_name = Path(java_path).stem
+        test_file = str(Path(java_path).parent / (class_name + 'Test.java'))
+        if not os.path.exists(test_file):
+            stub_path = generate_junit_test_stub(java_path)
+            if stub_path:
+                created.append(stub_path)
+    return created
+
+def run_junit_tests(project_root: str) -> Tuple[bool, str]:
+    """Run JUnit tests with JaCoCo coverage reporting."""
+    try:
+        # Check for build system
+        if os.path.exists(os.path.join(project_root, 'pom.xml')):
+            # Add JaCoCo plugin to pom.xml if not present
+            with open(os.path.join(project_root, 'pom.xml'), 'r') as f:
+                pom_content = f.read()
+                if 'jacoco-maven-plugin' not in pom_content:
+                    # Add JaCoCo plugin
+                    plugin_section = """
+                    <plugin>
+                        <groupId>org.jacoco</groupId>
+                        <artifactId>jacoco-maven-plugin</artifactId>
+                        <version>0.8.11</version>
+                        <executions>
+                            <execution>
+                                <goals>
+                                    <goal>prepare-agent</goal>
+                                </goals>
+                            </execution>
+                            <execution>
+                                <id>report</id>
+                                <phase>test</phase>
+                                <goals>
+                                    <goal>report</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    """
+                    pom_content = pom_content.replace('</plugins>', f'{plugin_section}</plugins>')
+                    with open(os.path.join(project_root, 'pom.xml'), 'w') as f:
+                        f.write(pom_content)
+            
+            # Run tests with coverage
+            result = subprocess.run(['mvn', 'clean', 'test'], capture_output=True, text=True)
+            
+            # Parse JaCoCo report
+            coverage_report = os.path.join(project_root, 'target', 'site', 'jacoco', 'index.html')
+            if os.path.exists(coverage_report):
+                with open(coverage_report, 'r') as f:
+                    coverage_content = f.read()
+                    # Extract coverage metrics
+                    coverage_metrics = {
+                        'line_coverage': extract_coverage_metric(coverage_content, 'Line'),
+                        'branch_coverage': extract_coverage_metric(coverage_content, 'Branch'),
+                        'method_coverage': extract_coverage_metric(coverage_content, 'Method')
+                    }
+                    st.session_state['coverage_metrics'] = coverage_metrics
+            
+        elif os.path.exists(os.path.join(project_root, 'build.gradle')):
+            # Add JaCoCo plugin to build.gradle if not present
+            with open(os.path.join(project_root, 'build.gradle'), 'r') as f:
+                gradle_content = f.read()
+                if 'jacoco' not in gradle_content:
+                    # Add JaCoCo plugin
+                    plugin_section = """
+                    plugins {
+                        id 'jacoco'
+                    }
+                    
+                    jacoco {
+                        toolVersion = "0.8.11"
+                    }
+                    
+                    jacocoTestReport {
+                        reports {
+                            html.required = true
+                        }
+                    }
+                    """
+                    gradle_content = plugin_section + gradle_content
+                    with open(os.path.join(project_root, 'build.gradle'), 'w') as f:
+                        f.write(gradle_content)
+            
+            # Run tests with coverage
+            result = subprocess.run(['./gradlew', 'clean', 'test', 'jacocoTestReport'], capture_output=True, text=True)
+            
+            # Parse JaCoCo report
+            coverage_report = os.path.join(project_root, 'build', 'reports', 'jacoco', 'test', 'html', 'index.html')
+            if os.path.exists(coverage_report):
+                with open(coverage_report, 'r') as f:
+                    coverage_content = f.read()
+                    # Extract coverage metrics
+                    coverage_metrics = {
+                        'line_coverage': extract_coverage_metric(coverage_content, 'Line'),
+                        'branch_coverage': extract_coverage_metric(coverage_content, 'Branch'),
+                        'method_coverage': extract_coverage_metric(coverage_content, 'Method')
+                    }
+                    st.session_state['coverage_metrics'] = coverage_metrics
+        
+        return result.returncode == 0, result.stdout
+        
+    except Exception as e:
+        return False, f"Error running tests: {str(e)}"
+
+def extract_coverage_metric(content: str, metric_type: str) -> float:
+    """Extract coverage metric from JaCoCo HTML report."""
+    try:
+        # Find the metric in the HTML content
+        pattern = f'{metric_type} Coverage: (\\d+\\.\\d+)%'
+        match = re.search(pattern, content)
+        if match:
+            return float(match.group(1))
+        return 0.0
+    except Exception:
+        return 0.0
+
+def parse_test_results(output: str) -> Dict:
+    """Parse test results to extract detailed information."""
+    results = {
+        'total_tests': 0,
+        'passed_tests': 0,
+        'failed_tests': [],
+        'skipped_tests': [],
+        'execution_time': 0,
+        'failures': []
+    }
+    
+    try:
+        # Parse Maven test output
+        if 'Tests run:' in output:
+            # Extract test counts
+            test_run_match = re.search(r'Tests run: (\d+), Failures: (\d+), Errors: (\d+), Skipped: (\d+)', output)
+            if test_run_match:
+                results['total_tests'] = int(test_run_match.group(1))
+                failures = int(test_run_match.group(2))
+                errors = int(test_run_match.group(3))
+                skipped = int(test_run_match.group(4))
+                results['passed_tests'] = results['total_tests'] - failures - errors - skipped
+                
+                # Extract execution time
+                time_match = re.search(r'Time elapsed: ([\d.]+) s', output)
+                if time_match:
+                    results['execution_time'] = float(time_match.group(1))
+                
+                # Extract failed tests
+                failed_tests = re.finditer(r'Failed tests:.*?Tests run: (\d+)', output, re.DOTALL)
+                for match in failed_tests:
+                    failure_section = match.group(0)
+                    test_name_match = re.search(r'(\w+Test):', failure_section)
+                    if test_name_match:
+                        results['failed_tests'].append(test_name_match.group(1))
+                        results['failures'].append({
+                            'test': test_name_match.group(1),
+                            'error': re.search(r'Caused by: (.*?)(?=\n\n|\Z)', failure_section, re.DOTALL).group(1) if re.search(r'Caused by:', failure_section) else 'Unknown error'
+                        })
+        
+        # Parse Gradle test output
+        elif 'Gradle Test Executor' in output:
+            # Extract test counts
+            test_run_match = re.search(r'(\d+) tests completed, (\d+) failed, (\d+) skipped', output)
+            if test_run_match:
+                results['total_tests'] = int(test_run_match.group(1))
+                failures = int(test_run_match.group(2))
+                skipped = int(test_run_match.group(3))
+                results['passed_tests'] = results['total_tests'] - failures - skipped
+                
+                # Extract execution time
+                time_match = re.search(r'Total time: ([\d.]+) secs', output)
+                if time_match:
+                    results['execution_time'] = float(time_match.group(1))
+                
+                # Extract failed tests
+                failed_tests = re.finditer(r'(\w+Test) > .*? FAILED', output)
+                for match in failed_tests:
+                    test_name = match.group(1)
+                    results['failed_tests'].append(test_name)
+                    # Try to find the error message
+                    error_match = re.search(f'{test_name} > .*? FAILED\n(.*?)(?=\n\n|\Z)', output, re.DOTALL)
+                    if error_match:
+                        results['failures'].append({
+                            'test': test_name,
+                            'error': error_match.group(1).strip()
+                        })
+    
+    except Exception as e:
+        st.error(f"Error parsing test results: {str(e)}")
+    
+    return results
 
 if __name__ == "__main__":
     main() 
