@@ -747,7 +747,7 @@ def render_refactoring_sidebar():
     # Add more thresholds as needed
 
 def render_home_tab():
-    """Render the Home tab content."""
+    render_quick_start("Home")
     st.title("Welcome to RefactAI")
     st.markdown("""
     RefactAI helps you detect and refactor code smells in Java projects using state-of-the-art LLMs.
@@ -829,7 +829,7 @@ def render_file_tree(tree: Dict, level: int = 0) -> None:
         st.markdown(f"{indent}📄 {tree['name']} ({size_str})", unsafe_allow_html=True)
 
 def render_upload_tab():
-    """Render the Project Upload tab content."""
+    render_quick_start("Project Upload")
     st.title("📂 Project Upload")
     
     # Upload Methods
@@ -1059,7 +1059,7 @@ METRIC_FULL_NAMES = {
     "num_public_methods": "Number of Public Methods",
     "num_public_fields": "Number of Public Fields",
     "comment_density": "Comment Density"
-}
+        }
 
 def render_metric_card(label: str, metric: dict, help_text: str = "") -> None:
     status_colors = {
@@ -1090,13 +1090,13 @@ def render_metric_card(label: str, metric: dict, help_text: str = "") -> None:
         </div>
     </div>
     """, unsafe_allow_html=True)
-    
+
 def format_metric_evidence(metric_name: str, value: float, threshold: float, comparison: str = ">") -> str:
     """Format metric evidence with value and threshold."""
     return f"{metric_name} = {value:.2f} {comparison} {threshold:.2f} threshold"
 
 def render_detection_tab():
-    """Render the Smell Detection tab content."""
+    render_quick_start("Smell Detection")
     st.markdown("""
     ### 🔍 Code Smell Detection
     <style>
@@ -1476,6 +1476,7 @@ def render_detection_tab():
         st.info("No external dependencies detected in this file.")
 
 def render_refactoring_tab():
+    render_quick_start("Refactoring")
     # Remove debug print
     dependencies = set()  # Always initialize at the top to avoid UnboundLocalError
     st.title("Code Refactoring")
@@ -1594,10 +1595,8 @@ def render_refactoring_tab():
         with st.spinner("Analyzing code..."):
             basic_metrics = calculate_basic_metrics(st.session_state.original_code)
             advanced_metrics = calculate_advanced_metrics(st.session_state.original_code, basic_metrics)
-
             # --- Organize content into sub-tabs ---
             analysis_tabs = st.tabs(["Advanced Metrics", "Charts", "Code Smells", "Dependencies"])
-
             # --- Advanced Metrics Tab ---
             with analysis_tabs[0]:
                 st.markdown("##### Advanced Metrics")
@@ -1611,10 +1610,9 @@ def render_refactoring_tab():
                     st.markdown(f"###### {category}")
                     cols = st.columns(len(metric_keys))
                     for col, metric_key in zip(cols, metric_keys):
-                        metric_data = advanced_metrics.get(metric_key, {})
+                        metric_data = advanced_metrics.get(metric_key, {"value": "N/A", "status": "missing"})
                         with col:
                             render_metric_card(metric_key, metric_data, metric_data.get("help", ""))
-
             # --- Charts Tab ---
             with analysis_tabs[1]:
                 st.markdown("##### Metric Visualization")
@@ -1636,7 +1634,6 @@ def render_refactoring_tab():
                         render_metric_category_chart(advanced_metrics, chart_category, chart_categories[chart_category])
                 except Exception as e:
                     st.error(f"Could not render metrics chart: {str(e)}")
-
             # --- Code Smells Tab ---
             with analysis_tabs[2]:
                 st.markdown("### 🚨 Detected Code Smells")
@@ -1657,68 +1654,45 @@ def render_refactoring_tab():
                                 render_smell_card(smell, details)
                 else:
                     st.success("No code smells detected!")
-            # --- Code Smells Tab ---
+            # --- Dependencies Tab ---
             with analysis_tabs[3]:
                 st.markdown("### 📊 Dependency Visualization")
-
-                # Show dependency warning above the chart if dependencies exist
                 if dependencies:
                     st.warning(
                         f"Refactoring this file may affect: {', '.join(sorted(dependencies))}. "
                         "Please review dependencies before proceeding."
                     )
-
                 chart_type = st.selectbox(
                     "Select Dependency Chart Type",
                     ["Network Graph", "Bar Chart", "Raw List"],
                     key="dependency_chart_type"
                 )
-
-                # Interpretation hints
                 if chart_type == "Network Graph":
-                    st.info("**Network Graph:** Shows the selected file (red) and its direct dependencies (blue). Each arrow points from your file to a file/class it depends on. This helps you see the structure and potential ripple effects of changes.")
+                    fig = dependency_network_chart(st.session_state.selected_file['name'], dependencies)
+                    st.plotly_chart(fig, use_container_width=True)
                 elif chart_type == "Bar Chart":
-                    st.info("**Bar Chart:** Lists all direct dependencies as bars. This is a simple way to see how many and which files/classes your file depends on.")
-                elif chart_type == "Raw List":
-                    st.info("**Raw List:** Shows a plain list of all direct dependencies for reference.")
-
-                selected_file = st.session_state.selected_file
-                if selected_file and dependencies:
-                    file_name = selected_file['name']
-                    if chart_type == "Network Graph":
-                        fig = dependency_network_chart(file_name, dependencies)
+                    fig = dependency_bar_chart(dependencies)
+                    if fig:
                         st.plotly_chart(fig, use_container_width=True)
-                    elif chart_type == "Bar Chart":
-                        fig = dependency_bar_chart(dependencies)
-                        if fig:
-                            st.plotly_chart(fig, use_container_width=True)
-                        else:
-                            st.info("No dependencies to visualize.")
-                    elif chart_type == "Raw List":
-                        st.markdown("**Direct Dependencies:**")
-                        for dep in sorted(dependencies):
-                            st.markdown(f"- {dep}")
+                    else:
+                        st.info("No dependencies to visualize.")
+                elif chart_type == "Raw List":
+                    st.markdown("**Direct Dependencies:**")
+                    for dep in sorted(dependencies):
+                        st.markdown(f"- {dep}")
                 else:
                     st.info("No file selected or no dependencies detected for this file.")
-
-            # --- Dependency Analysis ---
-            dependencies = find_java_dependencies(st.session_state.original_code)
-            st.session_state['current_dependencies'] = dependencies
-            if dependencies:
-                st.info(f"This file depends on: {', '.join(sorted(dependencies))}")
-            else:
-                st.info("No external dependencies detected in this file.")
-
-            # Navigation buttons (outside tabs)
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("← Back to File Selection", use_container_width=True):
-                    st.session_state.refactoring_step = 1
-                    st.rerun()
-            with col2:
-                if st.button("Next: Choose Patterns →", use_container_width=True):
-                    st.session_state.refactoring_step = 3
-                    st.rerun()
+        # --- Navigation buttons for all subtabs ---
+        st.markdown("<hr style='margin:2rem 0;'>", unsafe_allow_html=True)
+        nav_col1, nav_col2 = st.columns(2)
+        with nav_col1:
+            if st.button("← Back to File Selection", use_container_width=True, key="back_to_file_selection_btn"):
+                st.session_state.refactoring_step = 1
+                st.rerun()
+        with nav_col2:
+            if st.button("Next: Choose Patterns →", use_container_width=True, key="next_to_patterns_btn"):
+                st.session_state.refactoring_step = 3
+                st.rerun()
 
     # Step 3: Pattern Selection
     elif current_step == 3:
@@ -1803,7 +1777,7 @@ Will this refactoring have any unintended effects on the associated files/classe
                     temperature=0.2,
                     max_tokens=2048
                 )
-                st.markdown("#### 🤖 LLM Ripple Impact Assessment")
+                st.markdown("#### LLM Ripple Impact Assessment")
                 st.info(llm_ripple_response)
                 if re.search(r"risk|may affect|unintended|warning|not safe|break|error", llm_ripple_response, re.IGNORECASE):
                     st.warning("The LLM detected possible ripple impact. Please review the assessment above before proceeding.")
@@ -1817,22 +1791,22 @@ Will this refactoring have any unintended effects on the associated files/classe
         # --- End LLM Ripple Impact Assessment ---
         # If confirmed, run the refactoring LLM and display before/after code, diff, summary, etc.
         if st.session_state['llm_ripple_confirmed']:
-            # Model selection for refactoring (under Preview Changes)
+        # Model selection for refactoring (under Preview Changes)
             st.markdown("#### Select LLM Model for Refactoring")
-            selected_model = st.selectbox(
+        selected_model = st.selectbox(
                 "Choose a GPT-Lab Model:",
                 GPTLAB_MODELS,
                 index=GPTLAB_MODELS.index(st.session_state.get('selected_model', GPTLAB_MODELS[0])) if st.session_state.get('selected_model') in GPTLAB_MODELS else 0,
-                key="refactoring_model_preview",
-                help="Choose which LLM to use for this refactoring"
-            )
+            key="refactoring_model_preview",
+            help="Choose which LLM to use for this refactoring"
+        )
             # Always update the session state with the selected model
-            if st.session_state.get('selected_model') != selected_model:
+        if st.session_state.get('selected_model') != selected_model:
                 st.session_state['selected_model'] = selected_model
                 st.rerun()
-            model_to_use = st.session_state['selected_model']
+                model_to_use = st.session_state['selected_model']
             # Generate refactored code
-            with st.spinner("Generating refactored code..."):
+        with st.spinner("Generating refactored code..."):
                 start_time = time.time()
                 try:
                     refactored_code, metadata = generate_refactoring(
@@ -1878,7 +1852,7 @@ Will this refactoring have any unintended effects on the associated files/classe
                         ref_line = None
                         for line in diff_lines:
                             if line.startswith('@@'):
-                                # Example: @@ -1,7 +1,8 @@
+                                # Example: @@ -(\d+)(?:,\d+)? \+(\d+)(?:,(\d+))? @@
                                 import re
                                 m = re.match(r'@@ -(\d+)(?:,\d+)? \+(\d+)(?:,(\d+))? @@', line)
                                 if m:
@@ -2021,12 +1995,12 @@ Will this refactoring have any unintended effects on the associated files/classe
                     st.error(f"Error during refactoring: {str(e)}")
                     st.stop()
             # Navigation buttons for step 4 (always visible after preview)
-            col1, col2 = st.columns(2)
-            with col1:
+        col1, col2 = st.columns(2)
+        with col1:
                 if st.button("← Back to Pattern Selection", use_container_width=True, key="back_to_step3_btn"):
                     st.session_state.refactoring_step = 3
                     st.rerun()
-            with col2:
+        with col2:
                 if st.button("Next: Apply Refactoring →", use_container_width=True, key="to_step5_btn"):
                     st.session_state.refactoring_step = 5
                     st.rerun()
@@ -2199,7 +2173,7 @@ Refactored code:
         st.markdown("</div>", unsafe_allow_html=True)
 
 def render_testing_tab():
-    """Render the Testing & Metrics tab content with JUnit integration."""
+    render_quick_start("Testing & Metrics")
     st.title("Testing & Metrics")
     if not st.session_state.project_manager.project_path:
         st.warning("Please upload a project first")
@@ -2257,7 +2231,6 @@ def render_testing_tab():
             success, output = test_result
             if success:
                 st.success("All tests passed!")
-                
                 # Display detailed test results
                 if parsed_results:
                     st.markdown("#### Test Summary")
@@ -2266,7 +2239,6 @@ def render_testing_tab():
                     st.write(f"Failed: {len(parsed_results['failed_tests'])}")
                     st.write(f"Skipped: {len(parsed_results['skipped_tests'])}")
                     st.write(f"Execution Time: {parsed_results['execution_time']:.2f}s")
-                    
                     # Display coverage details
                     if coverage_metrics:
                         st.markdown("#### Coverage Details")
@@ -2279,22 +2251,19 @@ def render_testing_tab():
                             ]
                         }
                         st.bar_chart(pd.DataFrame(coverage_data).set_index('Metric'))
-                
-                # Show full output in expandable section
-                with st.expander("View Full Test Output"):
+                # Show full output with a button instead of nested expander
+                if st.button("Show Full Test Output", key="show_full_test_output_success"):
                     st.code(output[:2000])
             else:
                 st.error("Some tests failed or could not run.")
-                
                 # Display failure details
                 if parsed_results and parsed_results['failures']:
                     st.markdown("#### Failed Tests")
                     for failure in parsed_results['failures']:
-                        with st.expander(f"❌ {failure['test']}"):
+                        if st.button(f"Show Error for {failure['test']}", key=f"show_error_{failure['test']}"):
                             st.error(failure['error'])
-                
-                # Show full output in expandable section
-                with st.expander("View Full Test Output"):
+                # Show full output with a button instead of nested expander
+                if st.button("Show Full Test Output", key="show_full_test_output_fail"):
                     st.code(output[:2000])
         else:
             st.info("No test results yet. Click 'Run Tests' to execute JUnit tests.")
@@ -2953,6 +2922,41 @@ def parse_test_results(output: str) -> Dict:
         st.error(f"Error parsing test results: {str(e)}")
     
     return results
+
+# --- Add Quick Start/How to Use Section to each main tab ---
+def render_quick_start(tab_name):
+    with st.expander(f"ℹ️ How to use the {tab_name} page", expanded=False):
+        if tab_name == "Home":
+            st.markdown("""
+            - See an overview of your project and model status.
+            - Use the sidebar to configure models and smells.
+            - Navigate tabs for upload, analysis, refactoring, and testing.
+            """)
+        elif tab_name == "Project Upload":
+            st.markdown("""
+            - Upload a Java project via ZIP, GitHub, or individual files.
+            - Review project stats and browse files.
+            - Use search and filter to find files quickly.
+            """)
+        elif tab_name == "Smell Detection":
+            st.markdown("""
+            - Select a Java file to analyze for code smells.
+            - Click 'Analyze Code Smells' to see metrics and suggestions.
+            - Use the metrics and smell cards to guide improvements.
+            """)
+        elif tab_name == "Refactoring":
+            st.markdown("""
+            - Follow the workflow steps at the top: Select File → Analyze → Choose Patterns → Preview → Apply.
+            - Use navigation buttons to move between steps.
+            - Review the diff, summary, and metrics before applying changes.
+            - Use Undo/Restore and Export options as needed.
+            """)
+        elif tab_name == "Testing & Metrics":
+            st.markdown("""
+            - Run JUnit tests and view code coverage.
+            - Review test results and performance metrics.
+            - Use export options to save reports.
+            """)
 
 if __name__ == "__main__":
     main() 
