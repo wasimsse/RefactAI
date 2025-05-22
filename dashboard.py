@@ -76,6 +76,13 @@ st.markdown("""
         padding: 1rem 2rem;
     }
     
+    /* Heading styles for all tabs */
+    h1, h2, h3, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3, 
+    .section-header, .tab-header {
+        color: #1976d2 !important;
+        font-weight: 700;
+    }
+    
     /* Custom metric container */
     .metric-container {
         background-color: #f8f9fa;
@@ -127,6 +134,58 @@ st.markdown("""
         border-radius: 0.5rem;
         padding: 1rem;
         background-color: #f8f9fa;
+    }
+    
+    /* Card CSS */
+    .card {
+        background-color: rgba(255, 255, 255, 0.95);
+        border-radius: 12px;
+        padding: 24px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+        margin-bottom: 20px;
+        height: 200px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        border: 1px solid rgba(0, 0, 0, 0.05);
+        backdrop-filter: blur(10px);
+    }
+    
+    .card:hover {
+        box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
+        transform: translateY(-2px);
+        transition: all 0.3s ease;
+    }
+    
+    .card h3 {
+        color: #1976d2;
+        margin-bottom: 12px;
+        font-size: 1.2rem;
+        font-weight: 600;
+    }
+    
+    .card p {
+        color: #34495e;
+        font-size: 0.9rem;
+        margin: 0;
+        flex-grow: 1;
+        overflow: hidden;
+        line-height: 1.5;
+    }
+    
+    .card .status {
+        font-weight: 500;
+        margin-top: 12px;
+        padding-top: 8px;
+        border-top: 1px solid rgba(0, 0, 0, 0.05);
+    }
+    
+    .card .status.active {
+        color: #27ae60;
+    }
+    
+    .card .status.inactive {
+        color: #e74c3c;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -747,64 +806,229 @@ def render_refactoring_sidebar():
     # Add more thresholds as needed
 
 def render_home_tab():
-    render_quick_start("Home")
-    st.title("Welcome to RefactAI")
+    # Card CSS (keep as before for styling)
     st.markdown("""
-    RefactAI helps you detect and refactor code smells in Java projects using state-of-the-art LLMs.
-    Upload your code, analyze for common anti-patterns, and get AI-powered refactoring suggestions.
-    """)
-    
-    # Status and Metrics
+    <style>
+    .dashboard-card {
+        background: #fff;
+        border-radius: 18px;
+        box-shadow: 0 4px 24px rgba(44, 62, 80, 0.08);
+        padding: 2.2rem 2rem 1.5rem 2rem;
+        min-width: 220px;
+        max-width: 340px;
+        margin: 0.5rem 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        border: 1.5px solid #e3e8ee;
+    }
+    .dashboard-card .card-icon {
+        font-size: 2.2rem;
+        margin-bottom: 0.7rem;
+        color: #1976d2;
+    }
+    .dashboard-card .card-title {
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: #2c3e50;
+        margin-bottom: 0.2rem;
+        text-align: center;
+    }
+    .dashboard-card .card-value {
+        font-size: 2.2rem;
+        font-weight: 700;
+        color: #1976d2;
+        margin-bottom: 0.2rem;
+        text-align: center;
+    }
+    .dashboard-card .card-desc {
+        font-size: 1rem;
+        color: #6b7a90;
+        text-align: center;
+    }
+    .feature-list {
+        list-style: none;
+        padding-left: 0;
+        margin: 1.2rem 0 0 0;
+    }
+    .feature-list li {
+        font-size: 1.05rem;
+        color: #4a5a6a;
+        margin-bottom: 0.7rem;
+        display: flex;
+        align-items: center;
+    }
+    .feature-list li:before {
+        content: '✔';
+        color: #1976d2;
+        font-size: 1.1rem;
+        margin-right: 0.7rem;
+    }
+    .step-card {
+        background: #fff;
+        border-radius: 14px;
+        box-shadow: 0 2px 12px rgba(44, 62, 80, 0.07);
+        padding: 1.2rem 1.5rem;
+        margin-bottom: 1.1rem;
+        border-left: 5px solid #1976d2;
+        font-size: 1.08rem;
+        color: #2c3e50;
+        display: flex;
+        align-items: center;
+        gap: 1.1rem;
+    }
+    .step-number {
+        background: #1976d2;
+        color: #fff;
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        font-size: 1.1rem;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # Header
+    st.markdown('<div style="font-size:2.5rem;font-weight:800;color:#1976d2;text-align:center;margin-bottom:0.5rem;">Welcome to RefactAI</div>', unsafe_allow_html=True)
+    st.markdown('<div style="font-size:1.2rem;color:#4a5a6a;text-align:center;margin-bottom:2.5rem;">Your intelligent code refactoring assistant powered by state-of-the-art LLMs.<br>Transform your code quality with AI-driven analysis and refactoring.</div>', unsafe_allow_html=True)
+
+    # System Status (horizontal cards)
+    st.markdown('<div style="font-size:2rem;font-weight:700;color:#1976d2;margin:2.5rem 0 1.5rem 0;display:flex;align-items:center;gap:0.7rem;"><span style="font-size:1.7rem;">📊</span>System Status</div>', unsafe_allow_html=True)
     col1, col2, col3 = st.columns(3)
+    mm = st.session_state.model_manager
+    current_model = mm.current_model
+    if current_model and mm.models.get(current_model, {}).get("status") == "available":
+        status_class = "background:#e8f5e9;color:#2e7d32;border:2px solid #2e7d32;"
+        status_text = "Active"
+        model_name = current_model
+    else:
+        status_class = "background:#ffebee;color:#c62828;border:2px solid #c62828;"
+        status_text = "Inactive"
+        model_name = current_model if current_model else "No model loaded"
     with col1:
-        mm = st.session_state.model_manager
-        current_model = mm.current_model
-        if current_model and mm.models.get(current_model, {}).get("status") == "available":
-            model_status = "Active ✅"
-            model_name = current_model
-        else:
-            model_status = "Inactive ❌"
-            model_name = current_model if current_model else "No model loaded"
-        st.metric(
-            label="Model Status",
-            value=model_status,
-            delta=model_name
-        )
+        st.markdown(f'''
+        <div class="dashboard-card">
+            <div class="card-icon">🟢</div>
+            <div class="card-title">Model Status</div>
+            <div class="card-value"><span style="{status_class}padding:0.4rem 1.2rem;border-radius:20px;font-size:1.1rem;">{status_text}</span></div>
+            <div class="card-desc">Model: {model_name}</div>
+        </div>
+        ''', unsafe_allow_html=True)
     with col2:
-        # TODO: Implement real memory usage tracking
-        st.metric(
-            "Memory Usage",
-            "8.2 GB",
-            "2.1 GB free"
-        )
+        st.markdown('''
+        <div class="dashboard-card">
+            <div class="card-icon">💾</div>
+            <div class="card-title">Memory Usage</div>
+            <div class="card-value">8.2 GB</div>
+            <div class="card-desc">2.1 GB free</div>
+        </div>
+        ''', unsafe_allow_html=True)
     with col3:
-        # TODO: Implement real project statistics
-        st.metric(
-            "Classes Analyzed",
-            "12",
-            "+3 from last run"
-        )
-    
-    # Project Overview
-    with st.expander("📊 Project Overview", expanded=True):
-        if st.session_state.project_manager.project_path:
-            stats_col1, stats_col2 = st.columns(2)
-            with stats_col1:
-                st.markdown("### Current Project")
-                st.info(st.session_state.project_manager.project_path.name)
-                # TODO: Implement real project statistics
-                st.markdown("- **Total Classes:** 15")
-                st.markdown("- **Lines of Code:** 2,341")
-                
-            with stats_col2:
-                st.markdown("### Detected Issues")
-                if st.session_state.project_manager.analysis_results:
-                    for smell, count in st.session_state.project_manager.analysis_results.get("smells", {}).items():
-                        st.warning(f"- {count} {smell}")
-                else:
-                    st.info("No analysis results yet")
-        else:
-            st.info("No project loaded. Please upload a project in the Project Upload tab.")
+        st.markdown('''
+        <div class="dashboard-card">
+            <div class="card-icon">📊</div>
+            <div class="card-title">Classes Analyzed</div>
+            <div class="card-value">12</div>
+            <div class="card-desc">+3 from last run</div>
+        </div>
+        ''', unsafe_allow_html=True)
+
+    # Key Features (horizontal cards)
+    st.markdown('<div style="font-size:2rem;font-weight:700;color:#1976d2;margin:2.5rem 0 1.5rem 0;display:flex;align-items:center;gap:0.7rem;"><span style="font-size:1.7rem;">✨</span>Key Features</div>', unsafe_allow_html=True)
+    feat1, feat2, feat3, feat4 = st.columns(4)
+    with feat1:
+        st.markdown('''
+        <div class="dashboard-card">
+            <div class="card-icon">🔍</div>
+            <div class="card-title">Smart Code Analysis</div>
+            <ul class="feature-list">
+                <li>Advanced code smell detection</li>
+                <li>Pattern recognition</li>
+                <li>Real-time metrics</li>
+            </ul>
+        </div>
+        ''', unsafe_allow_html=True)
+    with feat2:
+        st.markdown('''
+        <div class="dashboard-card">
+            <div class="card-icon">🤖</div>
+            <div class="card-title">AI-Powered Refactoring</div>
+            <ul class="feature-list">
+                <li>Intelligent code suggestions</li>
+                <li>Multiple refactoring patterns</li>
+                <li>Safety checks and validation</li>
+            </ul>
+        </div>
+        ''', unsafe_allow_html=True)
+    with feat3:
+        st.markdown('''
+        <div class="dashboard-card">
+            <div class="card-icon">📊</div>
+            <div class="card-title">Comprehensive Metrics</div>
+            <ul class="feature-list">
+                <li>Code quality scores</li>
+                <li>Performance analysis</li>
+                <li>Trend visualization</li>
+            </ul>
+        </div>
+        ''', unsafe_allow_html=True)
+    with feat4:
+        st.markdown('''
+        <div class="dashboard-card">
+            <div class="card-icon">🧪</div>
+            <div class="card-title">Testing & Validation</div>
+            <ul class="feature-list">
+                <li>Automated test generation</li>
+                <li>Coverage analysis</li>
+                <li>Regression testing</li>
+            </ul>
+        </div>
+        ''', unsafe_allow_html=True)
+
+    # Project Overview (horizontal cards)
+    st.markdown('<div style="font-size:2rem;font-weight:700;color:#1976d2;margin:2.5rem 0 1.5rem 0;display:flex;align-items:center;gap:0.7rem;"><span style="font-size:1.7rem;">📁</span>Project Overview</div>', unsafe_allow_html=True)
+    if st.session_state.project_manager.project_path:
+        proj1, proj2 = st.columns(2)
+        with proj1:
+            st.markdown(f'''
+            <div class="dashboard-card">
+                <div class="card-icon">📂</div>
+                <div class="card-title">Current Project</div>
+                <div class="card-value">{st.session_state.project_manager.project_path.name}</div>
+                <ul class="feature-list">
+                    <li>Total Classes: 15</li>
+                    <li>Lines of Code: 2,341</li>
+                    <li>Last Updated: 2024-03-21</li>
+                </ul>
+            </div>
+            ''', unsafe_allow_html=True)
+        with proj2:
+            st.markdown(f'''
+            <div class="dashboard-card">
+                <div class="card-icon">⚠️</div>
+                <div class="card-title">Detected Issues</div>
+                <ul class="feature-list">
+                    {''.join([f'<li>{count} {smell}</li>' for smell, count in st.session_state.project_manager.analysis_results.get('smells', {}).items()]) if st.session_state.project_manager.analysis_results else '<li>No analysis results yet</li>'}
+                </ul>
+            </div>
+            ''', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="dashboard-card"><div class="card-icon">📂</div><div class="card-title">No project loaded</div><div class="card-desc">Please upload a project in the Project Upload tab.</div></div>', unsafe_allow_html=True)
+
+    # Getting Started
+    st.markdown('<div style="font-size:2rem;font-weight:700;color:#1976d2;margin:2.5rem 0 1.5rem 0;display:flex;align-items:center;gap:0.7rem;"><span style="font-size:1.7rem;"></span>Getting Started</div>', unsafe_allow_html=True)
+    steps = [
+        "Upload Your Project: Use the Project Upload tab to add your Java project",
+        "Analyze Code: Run code analysis to detect potential issues",
+        "Review Suggestions: Check the refactoring suggestions",
+        "Apply Changes: Apply the recommended changes with confidence"
+    ]
+    for i, step in enumerate(steps, 1):
+        st.markdown(f'<div class="step-card"><span class="step-number">{i}</span>{step}</div>', unsafe_allow_html=True)
 
 def format_file_size(size_bytes: int) -> str:
     """Format file size in human-readable format."""
