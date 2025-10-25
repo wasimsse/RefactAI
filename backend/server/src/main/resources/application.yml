@@ -1,0 +1,102 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: refactai-server
+  profiles:
+    active: dev
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 100MB
+
+refactai:
+  workspace:
+    temp-dir: ${java.io.tmpdir}/refactai-workspace
+    max-size: 1GB
+    cleanup-interval: 3600000 # 1 hour
+  assessment:
+    max-duration: 300000 # 5 minutes
+    parallel-detectors: 4
+  transforms:
+    max-preview-size: 1048576 # 1MB
+    dry-run-enabled: true
+  verification:
+    compile-timeout: 60000 # 1 minute
+    test-timeout: 300000 # 5 minutes
+    style-check-enabled: true
+  security:
+    local-first: true
+    redaction-enabled: false
+    provenance-logging: true
+  llm:
+    openrouter:
+      api-key: ${OPENROUTER_API_KEY:}
+      base-url: https://openrouter.ai/api/v1
+      timeout-seconds: 30
+      max-retries: 3
+      rate-limit-per-minute: 60
+    models:
+      primary-model: openai/gpt-4
+      fallback-model1: anthropic/claude-3.5-sonnet
+      fallback-model2: google/gemini-pro
+      model-configs:
+        openai/gpt-4:
+          cost-per-token: 0.00003
+          max-tokens: 8192
+          temperature: 0.7
+          description: "GPT-4 for complex reasoning and code generation"
+          capabilities: ["code-generation", "analysis", "refactoring", "documentation"]
+        anthropic/claude-3.5-sonnet:
+          cost-per-token: 0.000015
+          max-tokens: 8192
+          temperature: 0.7
+          description: "Claude-3.5-Sonnet for code analysis and documentation"
+          capabilities: ["code-analysis", "documentation", "refactoring", "explanation"]
+        google/gemini-pro:
+          cost-per-token: 0.00001
+          max-tokens: 8192
+          temperature: 0.7
+          description: "Gemini Pro for fast responses and cost optimization"
+          capabilities: ["code-generation", "analysis", "fast-response"]
+    security:
+      enable-code-redaction: true
+      sensitive-patterns:
+        - "(?i)(password|passwd|pwd)\\s*[:=]\\s*[\"']?[^\\s\"']+[\"']?"
+        - "(?i)(api[_-]?key|apikey)\\s*[:=]\\s*[\"']?[^\\s\"']+[\"']?"
+        - "(?i)(secret|token)\\s*[:=]\\s*[\"']?[^\\s\"']+[\"']?"
+      require-user-consent: true
+      enable-audit-logging: true
+      max-code-length: 50000
+    cost:
+      daily-limit: 10.0
+      monthly-limit: 100.0
+      enable-cost-tracking: true
+      enable-cost-warnings: true
+      warning-threshold: 0.8
+
+logging:
+  level:
+    ai.refact: DEBUG
+    org.springframework.web: INFO
+    org.eclipse.jgit: WARN
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+  file:
+    name: logs/refactai-server.log
+    max-size: 10MB
+    max-history: 30
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: when-authorized

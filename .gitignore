@@ -1,0 +1,73 @@
+# Dependencies
+node_modules/
+*/node_modules/
+
+# Build outputs
+target/
+build/
+dist/
+out/
+.next/
+*.jar
+*.war
+
+# IDE files
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+backend.log
+server.log
+
+# Temporary files
+*.tmp
+*.temp
+*.backup
+*.bak
+*.broken
+*.disabled
+
+# Cache directories
+.cache/
+.npm/
+.yarn/
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Data directories
+data/
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+!tailwind.config.js
+!postcss.config.js
+!next.config.js
+
+# Test files
+test-*.zip
+sample-*.zip
+*.zip
+
+# Maven
+.mvn/
+mvnw
+mvnw.cmd
+
+# Spring Boot
+application-*.yml
+application-*.properties
