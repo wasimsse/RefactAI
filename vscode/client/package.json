@@ -1,0 +1,149 @@
+{
+  "name": "refactai-tools",
+  "displayName": "RefactAI",
+  "description": "Professional Java refactoring suite with assessment-first workflow",
+  "version": "0.1.0",
+  "publisher": "refactai",
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguage:java",
+    "onCommand:refactai.assessProject",
+    "onCommand:refactai.assessFile",
+    "onCommand:refactai.assessSelection",
+    "onCommand:refactai.plan",
+    "onCommand:refactai.apply"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "refactai.assessProject",
+        "title": "RefactAI: Assess Project",
+        "category": "RefactAI"
+      },
+      {
+        "command": "refactai.assessFile",
+        "title": "RefactAI: Assess File",
+        "category": "RefactAI"
+      },
+      {
+        "command": "refactai.assessSelection",
+        "title": "RefactAI: Assess Selection",
+        "category": "RefactAI"
+      },
+      {
+        "command": "refactai.plan",
+        "title": "RefactAI: Plan Refactoring",
+        "category": "RefactAI"
+      },
+      {
+        "command": "refactai.apply",
+        "title": "RefactAI: Apply Refactoring",
+        "category": "RefactAI"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "refactai.assessProject",
+          "when": "workspaceFolderCount > 0"
+        },
+        {
+          "command": "refactai.assessFile",
+          "when": "resourceLangId == java"
+        },
+        {
+          "command": "refactai.assessSelection",
+          "when": "resourceLangId == java && editorHasSelection"
+        },
+        {
+          "command": "refactai.plan",
+          "when": "workspaceFolderCount > 0"
+        },
+        {
+          "command": "refactai.apply",
+          "when": "workspaceFolderCount > 0"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "refactai.assessFile",
+          "when": "resourceLangId == java",
+          "group": "1_modification"
+        },
+        {
+          "command": "refactai.assessSelection",
+          "when": "resourceLangId == java && editorHasSelection",
+          "group": "1_modification"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "refactai",
+          "title": "RefactAI",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "refactai": [
+        {
+          "id": "refactai.findings",
+          "name": "Refactor Reasons",
+          "when": "workspaceFolderCount > 0"
+        },
+        {
+          "id": "refactai.plan",
+          "name": "Refactoring Plan",
+          "when": "workspaceFolderCount > 0"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "RefactAI",
+      "properties": {
+        "refactai.serverUrl": {
+          "type": "string",
+          "default": "http://localhost:8080",
+          "description": "URL of the RefactAI server"
+        },
+        "refactai.enableAutoAssessment": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically assess files when they are opened"
+        },
+        "refactai.showFindingsInProblems": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show findings in the Problems panel"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.74.0",
+    "@types/node": "16.x",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.0.0",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "axios": "^1.6.0"
+  }
+}

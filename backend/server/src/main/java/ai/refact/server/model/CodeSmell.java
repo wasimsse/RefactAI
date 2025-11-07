@@ -4,6 +4,7 @@ import java.util.List;
 
 public class CodeSmell {
     private String type;
+    private String category;
     private String severity;
     private String description;
     private String location;
@@ -25,6 +26,14 @@ public class CodeSmell {
     
     public void setType(String type) {
         this.type = type;
+    }
+    
+    public String getCategory() {
+        return category;
+    }
+    
+    public void setCategory(String category) {
+        this.category = category;
     }
     
     public String getSeverity() {

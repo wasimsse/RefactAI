@@ -15,10 +15,10 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'RefactAI',
-  description: 'Professional Java refactoring suite with assessment-first workflow',
+  title: 'RENDRI-R',
+  description: 'RENDRI-R — Professional Java refactoring suite with assessment-first workflow',
   icons: {
-    icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">R⚙️</text></svg>',
+    icon: '/logo.png',
   },
 };
 

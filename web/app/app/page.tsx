@@ -11,6 +11,7 @@ import {
   ArrowRight,
   GitBranch
 } from 'lucide-react';
+import BrandLogo, { BrandName } from './components/BrandLogo';
 
 export default function HomePage() {
   const router = useRouter();
@@ -22,8 +23,8 @@ export default function HomePage() {
         <div className="container mx-auto px-8 py-6">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-4">
-              <div className="text-3xl font-bold text-blue-400">R⚙️</div>
-              <h1 className="text-2xl font-bold text-white tracking-tight">RefactAI</h1>
+              <BrandLogo size={36} />
+              <h1 className="text-2xl font-bold text-white tracking-tight">{BrandName}</h1>
             </div>
             <nav className="hidden lg:flex items-center space-x-8">
               <a href="/dashboard" className="text-slate-300 hover:text-white transition-colors duration-200 font-medium">Dashboard</a>
@@ -44,10 +45,10 @@ export default function HomePage() {
       <section className="container mx-auto px-8 py-24">
         <div className="text-center max-w-6xl mx-auto">
           <div className="flex items-center justify-center mb-12">
-            <div className="text-8xl mr-6 text-blue-400 font-bold">R⚙️</div>
-            <div className="text-left">
+            <BrandLogo size={96} />
+            <div className="text-left ml-6">
               <h1 className="text-6xl lg:text-8xl font-black text-white mb-4 tracking-tight leading-tight">
-                RefactAI
+                {BrandName}
               </h1>
               <p className="text-3xl lg:text-4xl text-blue-400 font-bold tracking-wide">Professional Java Refactoring Suite</p>
             </div>
@@ -100,7 +101,7 @@ export default function HomePage() {
       {/* Features Section */}
       <section id="features" className="container mx-auto px-8 py-24">
         <div className="text-center mb-20">
-          <h2 className="text-5xl font-black text-white mb-8 tracking-tight">Why Choose RefactAI?</h2>
+          <h2 className="text-5xl font-black text-white mb-8 tracking-tight">Why Choose {BrandName}?</h2>
           <p className="text-2xl text-slate-300 max-w-4xl mx-auto font-light leading-relaxed">
             Professional-grade tools designed for enterprise Java development teams
           </p>
@@ -201,7 +202,7 @@ export default function HomePage() {
             <div>
               <div className="flex items-center space-x-4 mb-6">
                 <div className="text-3xl font-bold text-blue-400">R⚙️</div>
-                <span className="text-2xl font-bold text-white">RefactAI</span>
+                <span className="text-2xl font-bold text-white">{BrandName}</span>
               </div>
               <p className="text-slate-400 text-lg font-light leading-relaxed">
                 Professional Java refactoring suite for enterprise development teams.
@@ -233,7 +234,7 @@ export default function HomePage() {
             </div>
           </div>
           <div className="border-t border-slate-700/50 mt-12 pt-12 text-center text-slate-500">
-            <p className="text-lg">© 2024 RefactAI. All rights reserved.</p>
+            <p className="text-lg">© 2024 {BrandName}. All rights reserved.</p>
           </div>
         </div>
       </footer>

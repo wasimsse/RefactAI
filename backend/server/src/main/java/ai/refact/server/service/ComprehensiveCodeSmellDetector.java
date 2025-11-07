@@ -151,12 +151,19 @@ public class ComprehensiveCodeSmellDetector {
     }
     
     /**
-     * Validate and clean up code smells - return all detected smells without artificial limits
+     * Validate and clean up code smells: deduplicate and return stable list.
      */
     private List<CodeSmell> validateAndCleanSmells(List<CodeSmell> smells, int totalLines) {
-        // Return all detected smells without artificial limitations
-        // This allows the system to detect 133+ code smells as originally intended
-        return smells;
+        // Deduplicate by (type|title|severity). Titles embed line numbers for line-level issues.
+        Map<String, CodeSmell> unique = new LinkedHashMap<>();
+        for (CodeSmell smell : smells) {
+            String typeStr = smell.getType() != null ? smell.getType().toString() : "";
+            String title = smell.getTitle() != null ? smell.getTitle() : "";
+            String sev = smell.getSeverity() != null ? smell.getSeverity().toString() : "";
+            String key = typeStr + "|" + title + "|" + sev;
+            unique.putIfAbsent(key, smell);
+        }
+        return new ArrayList<>(unique.values());
     }
     
     /**
@@ -185,9 +192,9 @@ public class ComprehensiveCodeSmellDetector {
             return smells; // Return empty list for non-Java files
         }
         
-        // Comprehensive patterns for realistic code smell detection - AGGRESSIVE MODE
-        Pattern magicNumberPattern = Pattern.compile("\\b\\d{1,}\\b"); // 1+ digit numbers (very comprehensive)
-        Pattern longStringPattern = Pattern.compile("\"[^\"]{20,}\""); // 20+ character strings (very comprehensive)
+        // Comprehensive patterns tuned to avoid over-counting
+        Pattern magicNumberPattern = Pattern.compile("\\b\\d{3,}\\b"); // 3+ digit numbers
+        Pattern longStringPattern = Pattern.compile("\"[^\"]{80,}\""); // 80+ character strings
         Pattern emptyCatchPattern = Pattern.compile("catch\\s*\\([^)]*\\)\\s*\\{\\s*\\}");
         Pattern emptyIfPattern = Pattern.compile("if\\s*\\([^)]*\\)\\s*\\{\\s*\\}");
         Pattern emptyForPattern = Pattern.compile("for\\s*\\([^)]*\\)\\s*\\{\\s*\\}");
@@ -384,7 +391,7 @@ public class ComprehensiveCodeSmellDetector {
                 smellsForThisLine++;
             }
             
-            // Long Strings (50+ characters)
+            // Long Strings (80+ characters)
             if (longStringPattern.matcher(line).find()) {
                 smells.add(createCodeSmell(
                     SmellType.LONG_STRING,
