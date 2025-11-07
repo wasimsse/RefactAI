@@ -22,6 +22,7 @@ import ai.refact.api.Assessment;
 import ai.refact.api.ReasonEvidence;
 import ai.refact.engine.FileMetricsService;
 import ai.refact.api.FileInfo.FileMetrics;
+import ai.refact.server.service.ComprehensiveCodeSmellDetector;
 
 /**
  * Service for managing project uploads, Git cloning, and project context creation.
@@ -35,11 +36,13 @@ public class ProjectService {
     private final Map<String, ProjectContext> projects = new HashMap<>();
     private final FileMetricsService fileMetricsService;
     private final RefactoringService refactoringService;
+    private final ComprehensiveCodeSmellDetector comprehensiveCodeSmellDetector;
     private final String sessionId;
     
-    public ProjectService(FileMetricsService fileMetricsService, RefactoringService refactoringService) {
+    public ProjectService(FileMetricsService fileMetricsService, RefactoringService refactoringService, ComprehensiveCodeSmellDetector comprehensiveCodeSmellDetector) {
         this.fileMetricsService = fileMetricsService;
         this.refactoringService = refactoringService;
+        this.comprehensiveCodeSmellDetector = comprehensiveCodeSmellDetector;
         this.sessionId = UUID.randomUUID().toString();
         this.workspaceDir = Paths.get(System.getProperty("java.io.tmpdir"), "refactai-workspace", sessionId);
         createWorkspaceIfNeeded();
@@ -368,14 +371,30 @@ public class ProjectService {
         // Create metrics using actual analysis
         FileMetrics metrics = createFileMetrics(filePath);
         
+        // Get code smells count using enhanced analysis for Java files
+        Integer codeSmellsCount = null;
+        logger.debug("File: {}, Type: {}, isJava: {}", fileName, fileType, fileName.endsWith(".java"));
+        if (fileType.equals("SOURCE") && fileName.endsWith(".java")) {
+            try {
+                logger.info("Analyzing code smells for Java file: {}", fileName);
+                logger.info("ComprehensiveCodeSmellDetector is null: {}", comprehensiveCodeSmellDetector == null);
+                // Use enhanced analysis to get code smells count
+                codeSmellsCount = getCodeSmellsCount(filePath);
+                logger.info("Found {} code smells for file: {}", codeSmellsCount, fileName);
+            } catch (Exception e) {
+                logger.warn("Failed to get code smells for file: {}", filePath, e);
+            }
+        }
+        
         return new FileInfo(
-            filePath.toString(), // full path
-            fileName,
-            relativePath,
-            FileInfo.FileType.valueOf(fileType), // convert string to enum
-            metrics,
-            0, // no findings initially
-            lastModified
+            filePath.toString(), // path
+            fileName, // name
+            relativePath, // relativePath
+            FileInfo.FileType.valueOf(fileType), // type
+            metrics, // metrics
+            0, // findings (int)
+            codeSmellsCount, // codeSmells (Integer)
+            lastModified // lastModified
         );
     }
     
@@ -694,6 +713,23 @@ public class ProjectService {
             Map.of("projectId", projectId),
             buildSystem
         );
+    }
+    
+    /**
+     * Get code smells count for a Java file using enhanced analysis
+     */
+    private Integer getCodeSmellsCount(Path filePath) {
+        try {
+            logger.info("Starting code smell analysis for file: {}", filePath);
+            // Use comprehensive code smell detector with Path
+            List<ai.refact.engine.model.CodeSmell> smells = comprehensiveCodeSmellDetector.detectAllCodeSmells(filePath);
+            logger.info("Analysis completed for file: {}, found {} smells", filePath, smells != null ? smells.size() : 0);
+            
+            return smells != null ? smells.size() : 0;
+        } catch (Exception e) {
+            logger.error("Failed to analyze code smells for file: {}", filePath, e);
+            return 0;
+        }
     }
     
     private Set<Path> findJavaFilesInProject(Path projectDir, String relativePath) throws IOException {

@@ -14,6 +14,7 @@ public record FileInfo(
     @JsonProperty("type") FileType type,
     @JsonProperty("metrics") FileMetrics metrics,
     @JsonProperty("findings") int findings,
+    @JsonProperty("codeSmells") Integer codeSmells,
     @JsonProperty("lastModified") long lastModified
 ) {
     
@@ -45,6 +46,7 @@ public record FileInfo(
             type,
             new FileMetrics(0, 0, 0, 0, 0, 0, 0), // Will be populated later
             0, // Will be populated later
+            null, // codeSmells will be populated later
             filePath.toFile().lastModified()
         );
     }

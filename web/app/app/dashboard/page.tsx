@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, Upload, GitBranch, Folder, File, Search, Filter, Eye, Download, BarChart3, Code, TestTube, Settings, Database, FileText, AlertTriangle, CheckCircle, Clock, Users, Zap, Shield, TrendingUp, Play, RefreshCw, Plus } from 'lucide-react';
+import BrandLogo, { BrandName } from '../components/BrandLogo';
 import { apiClient, type Workspace, type Assessment, type Plan, type FileInfo } from '../api/client';
 import { cachedApiClient } from '../api/cachedClient';
 import FileViewer from '../components/FileViewer';
@@ -47,6 +48,41 @@ export default function DashboardPage() {
   const [showCloneDialog, setShowCloneDialog] = useState(false);
   const [cloneUrl, setCloneUrl] = useState('');
   const [cloneBranch, setCloneBranch] = useState('main');
+
+  // Helper function to enhance files with code smell data (Assessment is source of truth)
+  const enhanceFilesWithCodeSmells = async (files: FileInfo[], workspaceId: string, assessmentData?: Assessment | null): Promise<FileInfo[]> => {
+    console.log('Enhancing files with code smell data...');
+    
+    const enhancedFiles = files.map((file) => {
+      if (!file.name.endsWith('.java')) {
+        return file;
+      }
+
+      const evidences = assessmentData?.evidences || [];
+      const countFromAssessment = (() => {
+        if (evidences.length === 0) return 0;
+        const norm = (p: string) => String(p || '').replace(/\\\\/g, '/').toLowerCase();
+        const rel = norm(file.relativePath);
+        const fileName = file.name.toLowerCase();
+        return evidences.filter((e: any) => {
+          const evPath = norm(e.pointer?.file || e.filePath || e.file || e.path);
+          if (!evPath) return false;
+          const exactMatch = evPath === rel;
+          const endsWithMatch = evPath.endsWith('/' + fileName) && evPath.includes('src/');
+          const containsMatch = evPath.includes('/' + fileName) && evPath.includes('src/');
+          return exactMatch || endsWithMatch || containsMatch;
+        }).length;
+      })();
+
+      return {
+        ...file,
+        codeSmells: countFromAssessment
+      } as FileInfo;
+    });
+    
+    console.log('File enhancement completed');
+    return enhancedFiles;
+  };
 
   // Helper function to create ZIP from files
   const createZipFromFiles = async (files: File[]): Promise<File> => {
@@ -163,7 +199,9 @@ export default function DashboardPage() {
       // Process results
       if (fileList.status === 'fulfilled') {
         console.log('Loaded files:', fileList.value.length);
-        setFiles(fileList.value);
+        const assessmentValue = assessmentData.status === 'fulfilled' ? assessmentData.value : null;
+        const filesWithCodeSmells = await enhanceFilesWithCodeSmells(fileList.value, workspace.id, assessmentValue);
+        setFiles(filesWithCodeSmells);
       }
 
       if (assessmentData.status === 'fulfilled' && assessmentData.value) {
@@ -394,7 +432,7 @@ export default function DashboardPage() {
             <div className="absolute -inset-2 bg-gradient-to-br from-blue-500/20 to-purple-600/20 rounded-full blur-xl"></div>
           </div>
           
-          <h2 className="text-2xl font-bold text-white mb-4">RefactAI Dashboard</h2>
+                  <h2 className="text-2xl font-bold text-white mb-4">{BrandName} Dashboard</h2>
           <p className="text-slate-300 text-lg mb-6">{loadingStep}</p>
           
           {/* Progress Bar */}
@@ -452,11 +490,9 @@ export default function DashboardPage() {
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-8">
               <div className="flex items-center space-x-4">
-                <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl flex items-center justify-center shadow-lg">
-                  <Code className="w-7 h-7 text-white" />
-                </div>
+                <BrandLogo size={48} />
                 <div>
-                  <h1 className="text-4xl font-black text-white tracking-tight mb-1">RefactAI</h1>
+                  <h1 className="text-4xl font-black text-white tracking-tight mb-1">{BrandName}</h1>
                   <p className="text-blue-400 font-semibold">Professional Java Refactoring Suite</p>
                 </div>
               </div>
@@ -507,7 +543,7 @@ export default function DashboardPage() {
                   <Code className="w-12 h-12 text-white" />
                 </div>
                 <div className="text-left">
-                  <h2 className="text-5xl font-black text-white mb-4 tracking-tight">Welcome to RefactAI</h2>
+                  <h2 className="text-5xl font-black text-white mb-4 tracking-tight">Welcome to {BrandName}</h2>
                   <p className="text-2xl text-blue-400 font-bold tracking-wide">Professional Java Refactoring Suite</p>
                 </div>
               </div>

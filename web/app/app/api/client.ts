@@ -172,6 +172,7 @@ export interface FileInfo {
     blankLines: number;
   };
   findings: number;
+  codeSmells?: number;
   lastModified: number;
 }
 

@@ -203,6 +203,7 @@ public class EnhancedAnalysisService {
     private CodeSmell convertEngineSmellToServerSmell(ai.refact.engine.model.CodeSmell engineSmell) {
         CodeSmell serverSmell = new CodeSmell();
         serverSmell.setType(engineSmell.getType().toString());
+        serverSmell.setCategory(engineSmell.getCategory() != null ? engineSmell.getCategory().toString() : null);
         serverSmell.setSeverity(engineSmell.getSeverity().toString());
         serverSmell.setDescription(engineSmell.getDescription());
         serverSmell.setLocation("Line " + engineSmell.getStartLine());

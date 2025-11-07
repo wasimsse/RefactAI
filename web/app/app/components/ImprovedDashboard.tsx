@@ -15,6 +15,7 @@ import {
   Wand2
 } from 'lucide-react';
 import { apiClient, FileInfo, Assessment, Plan, DependencyGraphData, FileDependencyAnalysis } from '../api/client';
+import { BrandName } from './BrandLogo';
 import { CodeSmellsPieChart, MetricsBarChart, QualityGauge } from './Charts';
 import DependencyGraph from './DependencyGraph';
 import DependencyMetrics from './DependencyMetrics';
@@ -109,7 +110,7 @@ export default function ImprovedDashboard({
       setFileContent(response.content);
       setCurrentPreviewFile(file);
       
-      // Load Enhanced Analysis data for accurate metrics
+      // Load Enhanced Analysis data (used for metrics/details only)
       try {
         console.log('Loading Enhanced Analysis for file:', file.relativePath);
         
@@ -120,9 +121,37 @@ export default function ImprovedDashboard({
         console.log('✅ Enhanced analysis loaded:', analysisResponse);
         console.log('🔍 Analysis timestamp:', timestamp);
         
-        // Set the analysis data for display
+        // Set the analysis data for display (but do NOT use its count if assessment is available)
         setFileAnalysis(analysisResponse);
-        setFileCodeSmells(analysisResponse.codeSmells || []);
+
+        // Prefer assessment evidences for consistent counts
+        const evidences = (assessment?.evidences || []).filter((evidence: any) => {
+          const filePath = evidence.pointer?.file;
+          if (!filePath) return false;
+          const norm = (p: string) => String(p).replace(/\\\\/g, '/').toLowerCase();
+          const ev = norm(filePath);
+          const rel = norm(file.relativePath);
+          const fileName = file.name.toLowerCase();
+          const exactMatch = ev === rel;
+          const endsWithMatch = ev.endsWith('/' + fileName) && ev.includes('src/');
+          const containsMatch = ev.includes('/' + fileName) && ev.includes('src/');
+          return exactMatch || endsWithMatch || containsMatch;
+        });
+
+        if (evidences.length > 0) {
+          const formatted = evidences.map((e: any) => ({
+            startLine: e.pointer?.startLine || 1,
+            endLine: e.pointer?.endLine || e.pointer?.startLine || 1,
+            detectorId: e.detectorId || 'unknown',
+            title: e.detectorId || 'Code Smell',
+            severity: e.severity || 'MAJOR',
+            summary: e.summary || 'Code quality issue detected',
+            description: e.summary || 'Code quality issue detected'
+          }));
+          setFileCodeSmells(formatted);
+        } else {
+          setFileCodeSmells(analysisResponse.codeSmells || []);
+        }
         
       } catch (analysisError) {
         console.warn('⚠️ Enhanced analysis failed, using assessment data:', analysisError);
@@ -1544,7 +1573,7 @@ export default function ImprovedDashboard({
               <Code className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-white">RefactAI</h1>
+              <h1 className="text-lg font-bold text-white">{BrandName}</h1>
               <p className="text-xs text-slate-400">Code Analysis</p>
             </div>
           </div>
@@ -1782,8 +1811,36 @@ export default function ImprovedDashboard({
                 }
                 
                 // Show analysis results
-                const fileCodeSmells = currentAnalysis?.codeSmells || [];
                 const fileMetrics = currentAnalysis?.metrics || {};
+                const fileCodeSmells = (() => {
+                  // Prefer Assessment evidences for consistent counts across the app
+                  if (assessment?.evidences && selectedFile) {
+                    const evidencesForFile = assessment.evidences.filter((e: any) => {
+                      const filePath = e.pointer?.file;
+                      if (!filePath) return false;
+                      const norm = (p: string) => String(p).replace(/\\\\/g, '/').toLowerCase();
+                      const ev = norm(filePath);
+                      const rel = norm(selectedFile.relativePath);
+                      const fileName = selectedFile.name.toLowerCase();
+                      const exactMatch = ev === rel;
+                      const endsWithMatch = ev.endsWith('/' + fileName) && ev.includes('src/');
+                      const containsMatch = ev.includes('/' + fileName) && ev.includes('src/');
+                      return exactMatch || endsWithMatch || containsMatch;
+                    });
+                    if (evidencesForFile.length > 0) {
+                      return evidencesForFile.map((e: any) => ({
+                        type: e.detectorId || e.summary || 'Code Smell',
+                        severity: e.severity || 'MINOR',
+                        description: e.summary || '',
+                        location: e.pointer?.file,
+                        startLine: e.pointer?.startLine,
+                        endLine: e.pointer?.endLine,
+                      }));
+                    }
+                  }
+                  // Fallback to enhanced analysis results when no assessment data
+                  return currentAnalysis?.codeSmells || [];
+                })();
                 
                 // Debug logging
                 console.log('🔍 File analysis display debug:', {
@@ -2650,7 +2707,7 @@ export default function ImprovedDashboard({
                     {paginatedFiles.map((file, index) => {
                       const badge = getFileTypeBadge(file);
                       
-                      // REAL CODE SMELLS CHECK: Use actual assessment data with fallback
+                      // REAL CODE SMELLS CHECK: Use actual assessment data only (no fallback)
                       const hasRealCodeSmells = assessment?.evidences?.some((evidence: any) => {
                         const filePath = evidence.filePath || evidence.fileName || evidence.path || evidence.file || evidence.location || evidence.sourceFile || evidence.targetFile;
                         
@@ -2667,28 +2724,7 @@ export default function ImprovedDashboard({
                         return false;
                       }) || false;
                       
-                      // FALLBACK: If no real data matches, use pattern matching for Java files
-                      const hasPatternMatch = !hasRealCodeSmells && file.name.endsWith('.java') && (
-                        file.name.includes('Test') || 
-                        file.name.includes('Assert') || 
-                        file.name.includes('Exception') ||
-                        file.name.includes('Runner') ||
-                        file.name.includes('Rule') ||
-                        file.name.includes('Cache') ||
-                        file.name.includes('Future') ||
-                        file.name.includes('Benchmark') ||
-                        file.name.includes('Loading') ||
-                        file.name.includes('Builder') ||
-                        file.name.includes('Factory') ||
-                        file.name.includes('Manager') ||
-                        file.name.includes('Service') ||
-                        file.name.includes('Handler') ||
-                        file.name.includes('Util') ||
-                        file.name.includes('Helper') ||
-                        file.name.includes('Processor')
-                      );
-                      
-                      const finalHasCodeSmells = hasRealCodeSmells || hasPatternMatch;
+                      const finalHasCodeSmells = hasRealCodeSmells;
                       
                       const codeSmellsCount = (() => {
                         if (hasRealCodeSmells) {
@@ -2703,14 +2739,6 @@ export default function ImprovedDashboard({
                             return realCount;
                           }
                         }
-                        
-                        // FALLBACK: If no real count but file has pattern match, show a reasonable count
-                        if (hasPatternMatch) {
-                          const fallbackCount = Math.floor(Math.random() * 3) + 1; // 1-3 smells
-                          console.log(`🔄 Fallback code smells count for ${file.name}: ${fallbackCount}`);
-                          return fallbackCount;
-                        }
-                        
                         console.log(`❌ No code smells for ${file.name}`);
                         return 0;
                       })();

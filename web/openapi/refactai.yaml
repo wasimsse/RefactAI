@@ -1,0 +1,598 @@
+openapi: 3.0.3
+info:
+  title: RefactAI API
+  version: 0.1.0
+  description: Professional Java refactoring suite with assessment-first workflow
+servers: 
+  - url: http://localhost:8080
+    description: Development server
+
+paths:
+  /workspaces:
+    post:
+      summary: Create workspace
+      description: Create a new workspace from local path, ZIP upload, or Git repository
+      requestBody: 
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWorkspace'
+      responses:
+        '201':
+          description: Workspace created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workspace'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    get:
+      summary: List workspaces
+      description: Get all workspaces
+      responses:
+        '200':
+          description: List of workspaces
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Workspace'
+
+  /workspaces/{id}:
+    get:
+      summary: Get workspace
+      description: Get workspace details
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Workspace details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workspace'
+        '404':
+          description: Workspace not found
+    delete:
+      summary: Delete workspace
+      description: Delete a workspace
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Workspace deleted successfully
+
+  /workspaces/{id}/assess:
+    post:
+      summary: Assess workspace
+      description: Run code quality assessment on the workspace
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssessmentRequest'
+      responses:
+        '200':
+          description: Assessment completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Assessment'
+        '202':
+          description: Assessment started (async)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobStatus'
+
+  /workspaces/{id}/plan:
+    post:
+      summary: Create refactoring plan
+      description: Generate a refactoring plan based on assessment results
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanRequest'
+      responses:
+        '200':
+          description: Plan generated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Plan'
+
+  /workspaces/{id}/apply:
+    post:
+      summary: Apply refactoring plan
+      description: Apply the refactoring plan to the workspace
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApplyRequest'
+      responses:
+        '200':
+          description: Refactoring applied successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplyResult'
+
+  /workspaces/{id}/artifacts/{name}:
+    get:
+      summary: Download artifact
+      description: Download assessment or refactoring artifacts
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [assessment.json, assessment.html, plan.json, patch.diff, impact.json]
+      responses:
+        '200':
+          description: Artifact content
+          content:
+            application/json:
+              schema:
+                type: object
+        '404':
+          description: Artifact not found
+
+  /health:
+    get:
+      summary: Health check
+      description: Check API health status
+      responses:
+        '200':
+          description: API is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "healthy"
+                  timestamp:
+                    type: string
+                    format: date-time
+
+components:
+  schemas:
+    CreateWorkspace:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [local, zip, git]
+          description: Type of workspace source
+        path:
+          type: string
+          description: Local file system path
+        url:
+          type: string
+          description: Git repository URL
+        ref:
+          type: string
+          description: Git branch or commit reference
+        name:
+          type: string
+          description: Optional workspace name
+
+    Workspace:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique workspace identifier
+        name:
+          type: string
+          description: Workspace name
+        type:
+          type: string
+          enum: [local, zip, git]
+        path:
+          type: string
+          description: Local path or Git URL
+        status:
+          type: string
+          enum: [created, analyzing, ready, error]
+        createdAt:
+          type: string
+          format: date-time
+        lastModified:
+          type: string
+          format: date-time
+        stats:
+          $ref: '#/components/schemas/WorkspaceStats'
+
+    WorkspaceStats:
+      type: object
+      properties:
+        totalFiles:
+          type: integer
+        javaFiles:
+          type: integer
+        totalLines:
+          type: integer
+        javaLines:
+          type: integer
+
+    AssessmentRequest:
+      type: object
+      properties:
+        detectors:
+          type: array
+          items:
+            type: string
+          description: Specific detectors to run (empty for all)
+        format:
+          type: array
+          items:
+            type: string
+            enum: [json, html]
+          default: [json]
+        includeMetrics:
+          type: boolean
+          default: true
+
+    Assessment:
+      type: object
+      properties:
+        workspaceId:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        summary:
+          $ref: '#/components/schemas/AssessmentSummary'
+        findings:
+          type: array
+          items:
+            $ref: '#/components/schemas/Finding'
+        metrics:
+          $ref: '#/components/schemas/ProjectMetrics'
+
+    AssessmentSummary:
+      type: object
+      properties:
+        totalFindings:
+          type: integer
+        criticalFindings:
+          type: integer
+        majorFindings:
+          type: integer
+        minorFindings:
+          type: integer
+        infoFindings:
+          type: integer
+        categories:
+          type: object
+          additionalProperties:
+            type: integer
+
+    Finding:
+      type: object
+      properties:
+        id:
+          type: string
+        detectorId:
+          type: string
+        category:
+          type: string
+          enum: [DESIGN, SECURITY, PERFORMANCE, API, TESTING, HOTSPOT]
+        severity:
+          type: string
+          enum: [INFO, MINOR, MAJOR, CRITICAL, BLOCKER]
+        summary:
+          type: string
+        description:
+          type: string
+        location:
+          $ref: '#/components/schemas/CodeLocation'
+        metrics:
+          type: object
+          additionalProperties:
+            oneOf:
+              - type: number
+              - type: string
+        suggestedTransforms:
+          type: array
+          items:
+            $ref: '#/components/schemas/TransformSuggestion'
+
+    CodeLocation:
+      type: object
+      properties:
+        file:
+          type: string
+        line:
+          type: integer
+        column:
+          type: integer
+        endLine:
+          type: integer
+        endColumn:
+          type: integer
+        className:
+          type: string
+        methodName:
+          type: string
+
+    TransformSuggestion:
+      type: object
+      properties:
+        id:
+          type: string
+        description:
+          type: string
+        intent:
+          type: string
+        risk:
+          type: number
+          minimum: 0
+          maximum: 1
+        payoff:
+          type: number
+          minimum: 0
+          maximum: 1
+        cost:
+          type: number
+          minimum: 0
+          maximum: 1
+
+    ProjectMetrics:
+      type: object
+      properties:
+        totalFiles:
+          type: integer
+        totalLines:
+          type: integer
+        cyclomaticComplexity:
+          type: number
+        maintainabilityIndex:
+          type: number
+        technicalDebt:
+          type: number
+        coverage:
+          type: number
+          minimum: 0
+          maximum: 1
+
+    PlanRequest:
+      type: object
+      properties:
+        assessmentId:
+          type: string
+        policy:
+          type: object
+          description: Override policy settings
+        maxTransforms:
+          type: integer
+          default: 10
+        interactive:
+          type: boolean
+          default: false
+
+    Plan:
+      type: object
+      properties:
+        id:
+          type: string
+        workspaceId:
+          type: string
+        assessmentId:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        summary:
+          $ref: '#/components/schemas/PlanSummary'
+        transforms:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlannedTransform'
+        conflicts:
+          type: array
+          items:
+            $ref: '#/components/schemas/TransformConflict'
+
+    PlanSummary:
+      type: object
+      properties:
+        totalTransforms:
+          type: integer
+        estimatedRisk:
+          type: number
+        estimatedPayoff:
+          type: number
+        estimatedCost:
+          type: number
+        priorityScore:
+          type: number
+
+    PlannedTransform:
+      type: object
+      properties:
+        id:
+          type: string
+        findingId:
+          type: string
+        transformId:
+          type: string
+        description:
+          type: string
+        location:
+          $ref: '#/components/schemas/CodeLocation'
+        risk:
+          type: number
+        payoff:
+          type: number
+        cost:
+          type: number
+        priority:
+          type: integer
+        dependencies:
+          type: array
+          items:
+            type: string
+        preview:
+          $ref: '#/components/schemas/TransformPreview'
+
+    TransformPreview:
+      type: object
+      properties:
+        before:
+          type: string
+        after:
+          type: string
+        diff:
+          type: string
+
+    TransformConflict:
+      type: object
+      properties:
+        transformIds:
+          type: array
+          items:
+            type: string
+        description:
+          type: string
+        resolution:
+          type: string
+          enum: [SKIP, MANUAL, AUTO]
+
+    ApplyRequest:
+      type: object
+      properties:
+        planId:
+          type: string
+        transformIds:
+          type: array
+          items:
+            type: string
+          description: Specific transforms to apply (empty for all)
+        verify:
+          type: boolean
+          default: true
+        dryRun:
+          type: boolean
+          default: false
+
+    ApplyResult:
+      type: object
+      properties:
+        id:
+          type: string
+        planId:
+          type: string
+        status:
+          type: string
+          enum: [SUCCESS, PARTIAL, FAILED]
+        appliedTransforms:
+          type: array
+          items:
+            type: string
+        failedTransforms:
+          type: array
+          items:
+            $ref: '#/components/schemas/FailedTransform'
+        verification:
+          $ref: '#/components/schemas/VerificationResult'
+        artifacts:
+          type: object
+          additionalProperties:
+            type: string
+
+    FailedTransform:
+      type: object
+      properties:
+        transformId:
+          type: string
+        reason:
+          type: string
+        error:
+          type: string
+
+    VerificationResult:
+      type: object
+      properties:
+        compiles:
+          type: boolean
+        testsPass:
+          type: boolean
+        styleCheck:
+          type: boolean
+        coverage:
+          type: number
+        issues:
+          type: array
+          items:
+            type: string
+
+    JobStatus:
+      type: object
+      properties:
+        jobId:
+          type: string
+        status:
+          type: string
+          enum: [PENDING, RUNNING, COMPLETED, FAILED]
+        progress:
+          type: number
+          minimum: 0
+          maximum: 100
+        message:
+          type: string
+        result:
+          type: object
+
+    Error:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object

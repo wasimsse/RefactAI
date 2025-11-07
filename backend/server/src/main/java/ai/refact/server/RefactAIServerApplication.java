@@ -9,6 +9,7 @@ import ai.refact.engine.AssessmentEngine;
 import ai.refact.server.service.ProjectService;
 import ai.refact.engine.FileMetricsService;
 import ai.refact.server.service.RefactoringService;
+import ai.refact.server.service.ComprehensiveCodeSmellDetector;
 import ai.refact.server.service.CodeAnalysisService;
 import ai.refact.engine.EnhancedCodeAnalysisService;
 import ai.refact.api.ReasonDetector;
@@ -35,8 +36,8 @@ public class RefactAIServerApplication {
     // All ReasonDetector components will be automatically discovered and injected
 
     @Bean
-    public ProjectService projectService(FileMetricsService fileMetricsService, RefactoringService refactoringService) {
-        return new ProjectService(fileMetricsService, refactoringService);
+    public ProjectService projectService(FileMetricsService fileMetricsService, RefactoringService refactoringService, ComprehensiveCodeSmellDetector comprehensiveCodeSmellDetector) {
+        return new ProjectService(fileMetricsService, refactoringService, comprehensiveCodeSmellDetector);
     }
 
     @Bean

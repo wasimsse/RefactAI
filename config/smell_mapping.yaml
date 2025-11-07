@@ -1,0 +1,109 @@
+mappings:
+  design.long-method:
+    transforms:
+      - { id: extract-method, intent: "split responsibilities", priority: 1 }
+      - { id: introduce-parameter-object, when: "params>5", priority: 2 }
+      - { id: extract-class, when: "complexity>15", priority: 3 }
+  
+  design.god-class:
+    transforms:
+      - { id: extract-class, intent: "split responsibilities", priority: 1 }
+      - { id: move-method, intent: "distribute methods", priority: 2 }
+      - { id: extract-interface, intent: "define contracts", priority: 3 }
+  
+  design.feature-envy:
+    transforms:
+      - { id: move-method, intent: "move to target class", priority: 1 }
+      - { id: extract-method, when: "partial_envy", priority: 2 }
+  
+  design.data-clumps:
+    transforms:
+      - { id: introduce-parameter-object, intent: "group related data", priority: 1 }
+      - { id: extract-class, when: "multiple_occurrences", priority: 2 }
+  
+  design.duplicates:
+    transforms:
+      - { id: extract-method, intent: "eliminate duplication", priority: 1 }
+      - { id: extract-class, when: "class_duplication", priority: 2 }
+      - { id: introduce-parameter-object, when: "parameter_duplication", priority: 3 }
+  
+  api.deprecated:
+    transforms:
+      - { id: change-signature, intent: "adapt to new API", priority: 1 }
+      - { id: extract-method, when: "deprecated_method_usage", priority: 2 }
+  
+  performance.hotspot:
+    transforms:
+      - { id: extract-method, intent: "isolate performance critical code", priority: 1 }
+      - { id: inline-method, when: "simple_hotspot", priority: 2 }
+  
+  testing.low-coverage:
+    transforms:
+      - { id: extract-method, intent: "improve testability", priority: 1 }
+      - { id: extract-interface, intent: "enable mocking", priority: 2 }
+  
+  security.vulnerability:
+    transforms:
+      - { id: extract-method, intent: "isolate security concerns", priority: 1 }
+      - { id: change-signature, intent: "secure API", priority: 2 }
+
+transform_definitions:
+  extract-method:
+    description: "Extract a method from existing code"
+    risk: 0.2
+    payoff: 0.8
+    cost: 0.3
+  
+  extract-class:
+    description: "Extract a new class from existing class"
+    risk: 0.4
+    payoff: 0.9
+    cost: 0.6
+  
+  extract-interface:
+    description: "Extract an interface from existing class"
+    risk: 0.3
+    payoff: 0.7
+    cost: 0.4
+  
+  move-method:
+    description: "Move a method to a different class"
+    risk: 0.5
+    payoff: 0.8
+    cost: 0.5
+  
+  introduce-parameter-object:
+    description: "Group related parameters into a single object"
+    risk: 0.3
+    payoff: 0.6
+    cost: 0.4
+  
+  inline-method:
+    description: "Inline a simple method call"
+    risk: 0.1
+    payoff: 0.3
+    cost: 0.2
+  
+  change-signature:
+    description: "Change method signature safely"
+    risk: 0.6
+    payoff: 0.7
+    cost: 0.5
+  
+  rename-symbol:
+    description: "Rename a symbol for better clarity"
+    risk: 0.1
+    payoff: 0.4
+    cost: 0.2
+  
+  organize-imports:
+    description: "Organize and clean up imports"
+    risk: 0.0
+    payoff: 0.2
+    cost: 0.1
+  
+  format-code:
+    description: "Format code according to style guidelines"
+    risk: 0.0
+    payoff: 0.1
+    cost: 0.1

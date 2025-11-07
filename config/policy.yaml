@@ -1,0 +1,38 @@
+weights:
+  risk: 0.5
+  payoff: 0.4
+  cost: 0.2
+
+gates:
+  forbid_refactor_if_tests_red: true
+  min_coverage_for_risky: 0.6
+  max_risk_score: 0.8
+  require_tests_for_public_api: true
+
+protected_packages:
+  - "com.company.security.**"
+  - "ai.refact.security.**"
+  - "**/generated/**"
+
+detector_settings:
+  design.long-method:
+    max_lines: 50
+    max_complexity: 10
+  design.god-class:
+    max_methods: 20
+    max_fields: 15
+  design.feature-envy:
+    min_external_calls: 3
+  design.data-clumps:
+    min_parameter_count: 4
+  api.deprecated:
+    severity_multiplier: 1.5
+
+transform_settings:
+  extract-method:
+    min_lines: 3
+    max_lines: 30
+  move-method:
+    require_same_package: false
+  change-signature:
+    allow_breaking_changes: false
