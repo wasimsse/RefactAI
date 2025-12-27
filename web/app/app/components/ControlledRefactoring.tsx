@@ -728,7 +728,8 @@ export default function ControlledRefactoring({
       console.log('📝 Generated refactored code:', refactoredCode.substring(0, 200) + '...');
       
       // Store out variable in a scope accessible to the apply section
-      const refactoringResponse = out;
+      // out is declared earlier in the function (line 650), so it's accessible here
+      const refactoringResponse = out || null;
       
       // Calculate changes properly
       const calculateChanges = (original: string, refactored: string) => {
