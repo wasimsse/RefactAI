@@ -289,6 +289,10 @@ export default function ControlledRefactoring({
       action: string;
       priority: string;
     }>;
+    selectedSmells?: string[];
+    totalSmells?: number;
+    selectedCount?: number;
+    smells?: Array<any>;
     steps: Array<any>;
   } | null>(null);
 
@@ -630,9 +634,10 @@ export default function ControlledRefactoring({
             signal: controller.signal
           });
           clearTimeout(timeoutId);
-        } catch (fetchError) {
+        } catch (fetchError: unknown) {
           clearTimeout(timeoutId);
-          if (fetchError.name === 'AbortError') {
+          const error = fetchError as Error;
+          if (error.name === 'AbortError') {
             throw new Error('Refactoring request timed out after 5 minutes. The file may be too large or the LLM service is slow.');
           }
           throw fetchError;
@@ -641,8 +646,11 @@ export default function ControlledRefactoring({
         setLoadingStep('Processing refactoring response...');
         setLoadingProgress(60);
         
+        // Declare out variable outside if block to fix scope issue
+        let out: any = null;
+        
         if (refactorRes.ok) {
-          const out = await refactorRes.json();
+          out = await refactorRes.json();
           console.log('✅ Refactoring response received:', out);
           
           // The unified endpoint returns refactoredContent in the response
@@ -1918,36 +1926,36 @@ export default function ControlledRefactoring({
             if (!stats) return null;
             
             return (
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
-                  <div className="text-slate-400 text-sm mb-1">Before Refactoring</div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                <div className="text-slate-400 text-sm mb-1">Before Refactoring</div>
                   <div className="text-white text-lg font-semibold">{stats.before?.total ?? 0} issues</div>
-                  <div className="text-xs text-slate-400 mt-1">
+                <div className="text-xs text-slate-400 mt-1">
                     CRIT {stats.before?.critical ?? 0} • MAJ {stats.before?.major ?? 0} • MIN {stats.before?.minor ?? 0}
-                  </div>
                 </div>
-                <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
-                  <div className="text-slate-400 text-sm mb-1">After Refactoring</div>
+              </div>
+              <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                <div className="text-slate-400 text-sm mb-1">After Refactoring</div>
                   <div className="text-white text-lg font-semibold">{stats.after?.total ?? 0} issues</div>
-                  <div className="text-xs text-slate-400 mt-1">
+                <div className="text-xs text-slate-400 mt-1">
                     CRIT {stats.after?.critical ?? 0} • MAJ {stats.after?.major ?? 0} • MIN {stats.after?.minor ?? 0}
-                  </div>
                 </div>
-                <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
-                  <div className="text-slate-400 text-sm mb-1">Improvement</div>
+              </div>
+              <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                <div className="text-slate-400 text-sm mb-1">Improvement</div>
                   <div className={`text-lg font-semibold ${
                     (stats.delta?.total ?? 0) > 0 ? 'text-green-400' : 
                     (stats.delta?.total ?? 0) < 0 ? 'text-red-400' : 'text-slate-400'
                   }`}>
                     {stats.delta?.total ?? 0 > 0 ? '−' : stats.delta?.total ?? 0 < 0 ? '+' : ''}{Math.abs(stats.delta?.total ?? 0)} total
                   </div>
-                  <div className="text-xs text-slate-400 mt-1">
-                    CRIT {stats.delta?.critical ?? 0 > 0 ? '−' : stats.delta?.critical ?? 0 < 0 ? '+' : ''}{Math.abs(stats.delta?.critical ?? 0)} • 
-                    MAJ {stats.delta?.major ?? 0 > 0 ? '−' : stats.delta?.major ?? 0 < 0 ? '+' : ''}{Math.abs(stats.delta?.major ?? 0)} • 
-                    MIN {stats.delta?.minor ?? 0 > 0 ? '−' : stats.delta?.minor ?? 0 < 0 ? '+' : ''}{Math.abs(stats.delta?.minor ?? 0)}
-                  </div>
-                </div>
-              </div>
+                <div className="text-xs text-slate-400 mt-1">
+                    CRIT {(stats.delta?.critical ?? 0) > 0 ? '−' : (stats.delta?.critical ?? 0) < 0 ? '+' : ''}{Math.abs(stats.delta?.critical ?? 0)} • 
+                    MAJ {(stats.delta?.major ?? 0) > 0 ? '−' : (stats.delta?.major ?? 0) < 0 ? '+' : ''}{Math.abs(stats.delta?.major ?? 0)} • 
+                    MIN {(stats.delta?.minor ?? 0) > 0 ? '−' : (stats.delta?.minor ?? 0) < 0 ? '+' : ''}{Math.abs(stats.delta?.minor ?? 0)}
+            </div>
+          </div>
+        </div>
             );
           })()}
           
