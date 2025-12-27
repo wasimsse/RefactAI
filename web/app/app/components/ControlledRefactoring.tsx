@@ -727,6 +727,9 @@ export default function ControlledRefactoring({
       console.log('🎉 Refactoring execution completed successfully!');
       console.log('📝 Generated refactored code:', refactoredCode.substring(0, 200) + '...');
       
+      // Store out variable in a scope accessible to the apply section
+      const refactoringResponse = out;
+      
       // Calculate changes properly
       const calculateChanges = (original: string, refactored: string) => {
         const origLines = (original || '').split('\n');
@@ -781,11 +784,11 @@ export default function ControlledRefactoring({
             setApplyResult({
               ...result,
               changes: result.changes || changes,
-              deltas: result.deltas || out.deltas
+              deltas: result.deltas || refactoringResponse?.deltas
             });
             // Store quality metrics if available
-            if (result.deltas?.qualityMetrics || out.deltas?.qualityMetrics) {
-              setQualityMetrics(result.deltas?.qualityMetrics || out.deltas?.qualityMetrics);
+            if (result.deltas?.qualityMetrics || refactoringResponse?.deltas?.qualityMetrics) {
+              setQualityMetrics(result.deltas?.qualityMetrics || refactoringResponse?.deltas?.qualityMetrics);
             }
             console.log('✅ Refactoring applied to file successfully:', result);
         } else {
@@ -795,11 +798,11 @@ export default function ControlledRefactoring({
             originalContent,
             refactoredContent: refactoredCode,
             changes: changes,
-            deltas: out?.deltas
+            deltas: refactoringResponse?.deltas
           });
           // Store quality metrics if available
-          if (out?.deltas?.qualityMetrics) {
-            setQualityMetrics(out.deltas.qualityMetrics);
+          if (refactoringResponse?.deltas?.qualityMetrics) {
+            setQualityMetrics(refactoringResponse.deltas.qualityMetrics);
           }
         }
       } catch (error) {
