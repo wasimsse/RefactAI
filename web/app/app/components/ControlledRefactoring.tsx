@@ -1249,8 +1249,25 @@ export default function ControlledRefactoring({
             </button>
           </div>
           <CodeComparison
-            beforeCode={(comparisonEntry?.originalContent) || applyResult?.originalContent || displayContent || fileContent || ''}
-            afterCode={(comparisonEntry?.refactoredContent) || applyResult?.refactoredContent || refactoredCode || ''}
+            beforeCode={(() => {
+              const before = comparisonEntry?.originalContent || applyResult?.originalContent || displayContent || fileContent || '';
+              console.log('📋 CodeComparison beforeCode:', before ? `${before.length} chars` : 'EMPTY', { 
+                hasComparisonEntry: !!comparisonEntry?.originalContent,
+                hasApplyResult: !!applyResult?.originalContent,
+                hasDisplayContent: !!displayContent,
+                hasFileContent: !!fileContent
+              });
+              return before;
+            })()}
+            afterCode={(() => {
+              const after = comparisonEntry?.refactoredContent || applyResult?.refactoredContent || refactoredCode || '';
+              console.log('📋 CodeComparison afterCode:', after ? `${after.length} chars` : 'EMPTY', {
+                hasComparisonEntry: !!comparisonEntry?.refactoredContent,
+                hasApplyResult: !!applyResult?.refactoredContent,
+                hasRefactoredCode: !!refactoredCode
+              });
+              return after;
+            })()}
             title={comparisonEntry?.title || `Refactoring: ${selectedFile?.split('/').pop() || 'File'}`}
             description={`Changes to ${selectedFile || 'the selected file'}`}
             changes={{
