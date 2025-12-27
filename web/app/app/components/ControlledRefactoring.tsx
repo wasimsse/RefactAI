@@ -869,10 +869,11 @@ export default function ControlledRefactoring({
         console.log('✅ Auto-analysis complete:', improvementStatsData);
         
         // FIX #2 & #7: Add stats to history entry automatically
+        // Note: changes variable is defined later in the function, so we'll use applyResult?.changes
         addHistoryEntry({
           originalContent: original,
           refactoredContent: updated,
-          changes: applyResult?.changes || changes,
+          changes: applyResult?.changes,
           stats: improvementStatsData,
         });
       } catch (e) {
