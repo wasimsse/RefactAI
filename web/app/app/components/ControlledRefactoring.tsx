@@ -518,6 +518,9 @@ export default function ControlledRefactoring({
 
   // Step 3: Execute refactoring
   const executeRefactoring = async () => {
+    // Declare out variable at function scope to fix scope issue
+    let out: any = null;
+    
     console.log('🚀 Starting refactoring execution...');
     console.log('🔍 Current state:', { 
       recommendations: recommendations.length, 
@@ -609,9 +612,6 @@ export default function ControlledRefactoring({
         console.log('📡 Calling /agents/refactor endpoint...');
         setLoadingStep('Calling refactoring engine...');
         setLoadingProgress(30);
-        
-        // Declare out variable at function scope to fix scope issue
-        let out: any = null;
         
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minute timeout for LLM calls
