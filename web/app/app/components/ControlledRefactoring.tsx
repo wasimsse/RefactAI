@@ -619,11 +619,11 @@ export default function ControlledRefactoring({
           const selectedSmellIds = agentAnalysis?.selectedSmells || agentAnalysis?.refactoringPlan?.map((p: any) => p.smellId) || undefined;
           
           refactorRes = await fetch(agentsUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              workspaceId,
-              filePath: selectedFile,
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            workspaceId,
+            filePath: selectedFile,
               goals: ['reduce code smells', 'improve readability', 'enhance maintainability'],
               selectedSmells: selectedSmellIds  // Pass agent's selected smells
             }),
@@ -815,6 +815,64 @@ export default function ControlledRefactoring({
       
       // Set refactored code state
       setRefactoredCode(refactoredCode);
+      
+      // FIX #1 & #6: Automatically analyze improvements after refactoring completes
+      // This ensures improvementStats is populated without requiring manual button click
+      console.log('📊 Auto-analyzing improvements after refactoring...');
+      try {
+        const original = originalContent;
+        const updated = refactoredCode;
+        const analyze = async (content: string) => {
+          const res = await fetch('/api/workspace-enhanced-analysis/analyze-live', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ workspaceId, filePath: selectedFile, content })
+          });
+          if (!res.ok) throw new Error(`analyze-live failed: ${res.status}`);
+          return res.json();
+        };
+        const [before, after] = await Promise.all([analyze(original), analyze(updated)]);
+        const toStats = (r: any) => {
+          const total = Array.isArray(r?.codeSmells) ? r.codeSmells.length : (r?.totalSmells ?? 0);
+          const sev = (r?.severitySummary as Record<string, number>) || {};
+          return {
+            total,
+            critical: sev.CRITICAL || sev.critical || 0,
+            major: sev.MAJOR || sev.major || 0,
+            minor: sev.MINOR || sev.minor || 0,
+          };
+        };
+        const beforeStats = toStats(before);
+        const afterStats = toStats(after);
+        const improvementStatsData = {
+          before: beforeStats,
+          after: afterStats,
+          delta: {
+            total: beforeStats.total - afterStats.total,
+            critical: beforeStats.critical - afterStats.critical,
+            major: beforeStats.major - afterStats.major,
+            minor: beforeStats.minor - afterStats.minor,
+          },
+        };
+        setImprovementStats(improvementStatsData);
+        console.log('✅ Auto-analysis complete:', improvementStatsData);
+        
+        // FIX #2 & #7: Add stats to history entry automatically
+        addHistoryEntry({
+          originalContent: original,
+          refactoredContent: updated,
+          changes: applyResult?.changes || changes,
+          stats: improvementStatsData,
+        });
+      } catch (e) {
+        console.warn('⚠️ Auto-analysis failed (non-critical):', e);
+        // Still add history entry without stats if analysis fails
+        addHistoryEntry({
+          originalContent: originalContent,
+          refactoredContent: refactoredCode,
+          changes: applyResult?.changes || changes,
+        });
+      }
       
       // Call the completion callback (with error handling)
       try {
@@ -1248,7 +1306,7 @@ export default function ControlledRefactoring({
               Close
             </button>
           </div>
-          <CodeComparison
+        <CodeComparison
             beforeCode={(() => {
               const before = comparisonEntry?.originalContent || applyResult?.originalContent || displayContent || fileContent || '';
               console.log('📋 CodeComparison beforeCode:', before ? `${before.length} chars` : 'EMPTY', { 
@@ -1270,22 +1328,22 @@ export default function ControlledRefactoring({
             })()}
             title={comparisonEntry?.title || `Refactoring: ${selectedFile?.split('/').pop() || 'File'}`}
             description={`Changes to ${selectedFile || 'the selected file'}`}
-            changes={{
-              added: (comparisonEntry?.changes?.added) ?? (applyResult?.changes?.added || 0),
-              removed: (comparisonEntry?.changes?.removed) ?? (applyResult?.changes?.removed || 0),
-              modified: (comparisonEntry?.changes?.modified) ?? (applyResult?.changes?.modified || (applyResult?.changes?.linesChanged || 0))
-            }}
-            metrics={{
+          changes={{
+            added: (comparisonEntry?.changes?.added) ?? (applyResult?.changes?.added || 0),
+            removed: (comparisonEntry?.changes?.removed) ?? (applyResult?.changes?.removed || 0),
+            modified: (comparisonEntry?.changes?.modified) ?? (applyResult?.changes?.modified || (applyResult?.changes?.linesChanged || 0))
+          }}
+          metrics={{
               complexityBefore: qualityMetrics?.before?.complexity || applyResult?.deltas?.qualityMetrics?.before?.complexity || 0,
               complexityAfter: qualityMetrics?.after?.complexity || applyResult?.deltas?.qualityMetrics?.after?.complexity || 0,
               maintainabilityBefore: qualityMetrics?.before?.maintainability || applyResult?.deltas?.qualityMetrics?.before?.maintainability || 0,
               maintainabilityAfter: qualityMetrics?.after?.maintainability || applyResult?.deltas?.qualityMetrics?.after?.maintainability || 0,
               testabilityBefore: qualityMetrics?.before?.testability || applyResult?.deltas?.qualityMetrics?.before?.testability || 0,
               testabilityAfter: qualityMetrics?.after?.testability || applyResult?.deltas?.qualityMetrics?.after?.testability || 0
-            }}
-            onApply={() => { setShowComparison(false); setComparisonEntry(null); }}
-            onReject={() => { setShowComparison(false); setComparisonEntry(null); }}
-          />
+          }}
+          onApply={() => { setShowComparison(false); setComparisonEntry(null); }}
+          onReject={() => { setShowComparison(false); setComparisonEntry(null); }}
+        />
         </div>
       )}
 
@@ -1837,31 +1895,61 @@ export default function ControlledRefactoring({
             </div>
           </div>
           
-          {improvementStats && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
-                <div className="text-slate-400 text-sm mb-1">Before Refactoring</div>
-                <div className="text-white text-lg font-semibold">{improvementStats.before?.total} issues</div>
-                <div className="text-xs text-slate-400 mt-1">
-                  CRIT {improvementStats.before?.critical} • MAJ {improvementStats.before?.major} • MIN {improvementStats.before?.minor}
+          {/* FIX #4: Always show issue comparison, with fallback to current code smells if stats not available */}
+          {(() => {
+            // Use improvementStats if available, otherwise calculate from effectiveCodeSmells
+            let stats = improvementStats;
+            if (!stats && effectiveCodeSmells && effectiveCodeSmells.length > 0) {
+              const toStats = (smells: any[]) => {
+                const total = smells.length;
+                const critical = smells.filter(s => (s.severity || '').toUpperCase() === 'CRITICAL').length;
+                const major = smells.filter(s => (s.severity || '').toUpperCase() === 'MAJOR').length;
+                const minor = smells.filter(s => (s.severity || '').toUpperCase() === 'MINOR').length;
+                return { total, critical, major, minor };
+              };
+              const beforeStats = toStats(effectiveCodeSmells);
+              stats = {
+                before: beforeStats,
+                after: beforeStats, // Will be updated after analysis
+                delta: { total: 0, critical: 0, major: 0, minor: 0 }
+              };
+            }
+            
+            if (!stats) return null;
+            
+            return (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                  <div className="text-slate-400 text-sm mb-1">Before Refactoring</div>
+                  <div className="text-white text-lg font-semibold">{stats.before?.total ?? 0} issues</div>
+                  <div className="text-xs text-slate-400 mt-1">
+                    CRIT {stats.before?.critical ?? 0} • MAJ {stats.before?.major ?? 0} • MIN {stats.before?.minor ?? 0}
+                  </div>
+                </div>
+                <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                  <div className="text-slate-400 text-sm mb-1">After Refactoring</div>
+                  <div className="text-white text-lg font-semibold">{stats.after?.total ?? 0} issues</div>
+                  <div className="text-xs text-slate-400 mt-1">
+                    CRIT {stats.after?.critical ?? 0} • MAJ {stats.after?.major ?? 0} • MIN {stats.after?.minor ?? 0}
+                  </div>
+                </div>
+                <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                  <div className="text-slate-400 text-sm mb-1">Improvement</div>
+                  <div className={`text-lg font-semibold ${
+                    (stats.delta?.total ?? 0) > 0 ? 'text-green-400' : 
+                    (stats.delta?.total ?? 0) < 0 ? 'text-red-400' : 'text-slate-400'
+                  }`}>
+                    {stats.delta?.total ?? 0 > 0 ? '−' : stats.delta?.total ?? 0 < 0 ? '+' : ''}{Math.abs(stats.delta?.total ?? 0)} total
+                  </div>
+                  <div className="text-xs text-slate-400 mt-1">
+                    CRIT {stats.delta?.critical ?? 0 > 0 ? '−' : stats.delta?.critical ?? 0 < 0 ? '+' : ''}{Math.abs(stats.delta?.critical ?? 0)} • 
+                    MAJ {stats.delta?.major ?? 0 > 0 ? '−' : stats.delta?.major ?? 0 < 0 ? '+' : ''}{Math.abs(stats.delta?.major ?? 0)} • 
+                    MIN {stats.delta?.minor ?? 0 > 0 ? '−' : stats.delta?.minor ?? 0 < 0 ? '+' : ''}{Math.abs(stats.delta?.minor ?? 0)}
+                  </div>
                 </div>
               </div>
-              <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
-                <div className="text-slate-400 text-sm mb-1">After Refactoring</div>
-                <div className="text-white text-lg font-semibold">{improvementStats.after?.total} issues</div>
-                <div className="text-xs text-slate-400 mt-1">
-                  CRIT {improvementStats.after?.critical} • MAJ {improvementStats.after?.major} • MIN {improvementStats.after?.minor}
-                </div>
-              </div>
-              <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
-                <div className="text-slate-400 text-sm mb-1">Improvement</div>
-                <div className="text-green-400 text-lg font-semibold">−{improvementStats.delta?.total} total</div>
-                <div className="text-xs text-slate-400 mt-1">
-                  CRIT −{improvementStats.delta?.critical} • MAJ −{improvementStats.delta?.major} • MIN −{improvementStats.delta?.minor}
-            </div>
-          </div>
-        </div>
-          )}
+            );
+          })()}
           
           {/* Refactoring History */}
           <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
@@ -1896,8 +1984,11 @@ export default function ControlledRefactoring({
                       <div className="text-sm text-slate-300">
                         <span className="font-mono">{new Date(h.timestamp).toLocaleString()}</span>
                         {h.stats?.delta && (
-                          <span className="ml-2 text-emerald-300">
-                            −{h.stats.delta.total} issues
+                          <span className={`ml-2 ${
+                            h.stats.delta.total > 0 ? 'text-green-400' : 
+                            h.stats.delta.total < 0 ? 'text-red-400' : 'text-slate-400'
+                          }`}>
+                            {h.stats.delta.total > 0 ? '−' : h.stats.delta.total < 0 ? '+' : ''}{Math.abs(h.stats.delta.total)} issues
                           </span>
                         )}
                       </div>
