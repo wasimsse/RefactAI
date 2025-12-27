@@ -19,9 +19,11 @@ except ImportError:
  
 # Point agents to the running backend by default (8083). Override with BACKEND_BASE if needed.
 BACKEND_BASE = os.environ.get("BACKEND_BASE", "http://localhost:8083/api")
-# Load from environment variable (preferred), .env file, or use fallback
-# Note: For production, use environment variable or .env file instead of hardcoding
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") or "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"
+# Load from environment variable (preferred) or .env file
+# IMPORTANT: Never hardcode API keys in source code. Use environment variables or .env file.
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+if not OPENROUTER_API_KEY:
+    print("⚠️  WARNING: OPENROUTER_API_KEY not set. Set it via environment variable or .env file.")
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 MODEL = os.environ.get("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet")
 
@@ -789,7 +791,7 @@ async def _refactor_impl(req: RefactorRequest):
                 try:
                     # Pass refactoring plan to make refactoring smell-driven
                     raw_llm = await call_llm_refactor(original, req.filePath, smells, req.goals, prior, refactoring_plan)
-                    candidate = sanitize_llm_output(original, raw_llm)
+                candidate = sanitize_llm_output(original, raw_llm)
                 except httpx.TimeoutException as te:
                     print(f"LLM call timeout: {te}")
                     candidate = apply_meaningful_fallback_refactor(original, smells)
@@ -1036,7 +1038,7 @@ async def _refactor_impl(req: RefactorRequest):
         add_step(name="Fatal", agent="Coordinator", status="error", startedAt=now(), endedAt=now(), error=str(e))
         # Try to return at least the steps we have so far
         try:
-            return {
+        return {
             "success": False,
             "steps": steps_json(),
                 "originalContent": original if 'original' in locals() else "",
