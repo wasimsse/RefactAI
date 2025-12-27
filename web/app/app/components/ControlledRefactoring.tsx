@@ -1232,29 +1232,44 @@ export default function ControlledRefactoring({
         </div>
       )}
 
-      {/* Diff modal */}
+      {/* Code Comparison View - Always show at top when enabled */}
       {showComparison && (
-        <CodeComparison
-          beforeCode={(comparisonEntry?.originalContent) || applyResult?.originalContent || displayContent}
-          afterCode={(comparisonEntry?.refactoredContent) || applyResult?.refactoredContent || refactoredCode}
-          title={comparisonEntry?.title || `Refactoring: ${selectedFile.split('/').pop()}`}
-          description={`Changes to ${selectedFile}`}
-          changes={{
-            added: (comparisonEntry?.changes?.added) ?? (applyResult?.changes?.added || 0),
-            removed: (comparisonEntry?.changes?.removed) ?? (applyResult?.changes?.removed || 0),
-            modified: (comparisonEntry?.changes?.modified) ?? (applyResult?.changes?.modified || (applyResult?.changes?.linesChanged || 0))
-          }}
-          metrics={{
-            complexityBefore: qualityMetrics?.before?.complexity || applyResult?.deltas?.qualityMetrics?.before?.complexity || 0,
-            complexityAfter: qualityMetrics?.after?.complexity || applyResult?.deltas?.qualityMetrics?.after?.complexity || 0,
-            maintainabilityBefore: qualityMetrics?.before?.maintainability || applyResult?.deltas?.qualityMetrics?.before?.maintainability || 0,
-            maintainabilityAfter: qualityMetrics?.after?.maintainability || applyResult?.deltas?.qualityMetrics?.after?.maintainability || 0,
-            testabilityBefore: qualityMetrics?.before?.testability || applyResult?.deltas?.qualityMetrics?.before?.testability || 0,
-            testabilityAfter: qualityMetrics?.after?.testability || applyResult?.deltas?.qualityMetrics?.after?.testability || 0
-          }}
-          onApply={() => { setShowComparison(false); setComparisonEntry(null); }}
-          onReject={() => { setShowComparison(false); setComparisonEntry(null); }}
-        />
+        <div className="mb-8">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-2xl font-bold text-white flex items-center">
+              <Eye className="w-6 h-6 mr-2 text-blue-400" />
+              Code Comparison
+            </h2>
+            <button
+              onClick={() => setShowComparison(false)}
+              className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors flex items-center"
+            >
+              <X className="w-4 h-4 mr-2" />
+              Close
+            </button>
+          </div>
+          <CodeComparison
+            beforeCode={(comparisonEntry?.originalContent) || applyResult?.originalContent || displayContent || fileContent || ''}
+            afterCode={(comparisonEntry?.refactoredContent) || applyResult?.refactoredContent || refactoredCode || ''}
+            title={comparisonEntry?.title || `Refactoring: ${selectedFile?.split('/').pop() || 'File'}`}
+            description={`Changes to ${selectedFile || 'the selected file'}`}
+            changes={{
+              added: (comparisonEntry?.changes?.added) ?? (applyResult?.changes?.added || 0),
+              removed: (comparisonEntry?.changes?.removed) ?? (applyResult?.changes?.removed || 0),
+              modified: (comparisonEntry?.changes?.modified) ?? (applyResult?.changes?.modified || (applyResult?.changes?.linesChanged || 0))
+            }}
+            metrics={{
+              complexityBefore: qualityMetrics?.before?.complexity || applyResult?.deltas?.qualityMetrics?.before?.complexity || 0,
+              complexityAfter: qualityMetrics?.after?.complexity || applyResult?.deltas?.qualityMetrics?.after?.complexity || 0,
+              maintainabilityBefore: qualityMetrics?.before?.maintainability || applyResult?.deltas?.qualityMetrics?.before?.maintainability || 0,
+              maintainabilityAfter: qualityMetrics?.after?.maintainability || applyResult?.deltas?.qualityMetrics?.after?.maintainability || 0,
+              testabilityBefore: qualityMetrics?.before?.testability || applyResult?.deltas?.qualityMetrics?.before?.testability || 0,
+              testabilityAfter: qualityMetrics?.after?.testability || applyResult?.deltas?.qualityMetrics?.after?.testability || 0
+            }}
+            onApply={() => { setShowComparison(false); setComparisonEntry(null); }}
+            onReject={() => { setShowComparison(false); setComparisonEntry(null); }}
+          />
+        </div>
       )}
 
       {/* Step 2: Agent Recommendations */}
