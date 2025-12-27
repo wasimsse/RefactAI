@@ -610,6 +610,9 @@ export default function ControlledRefactoring({
         setLoadingStep('Calling refactoring engine...');
         setLoadingProgress(30);
         
+        // Declare out variable at function scope to fix scope issue
+        let out: any = null;
+        
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minute timeout for LLM calls
         let refactorRes;
@@ -645,9 +648,6 @@ export default function ControlledRefactoring({
         
         setLoadingStep('Processing refactoring response...');
         setLoadingProgress(60);
-        
-        // Declare out variable outside if block to fix scope issue
-        let out: any = null;
         
         if (refactorRes.ok) {
           out = await refactorRes.json();
