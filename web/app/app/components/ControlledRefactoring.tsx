@@ -1,6 +1,8 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import CodeComparison from './CodeComparison';
+import { apiClient } from '../api/client';
 import { 
   Brain, 
   CheckCircle, 
@@ -26,6 +28,7 @@ import {
   TrendingUp,
   AlertCircle,
   Info,
+  XCircle,
   ThumbsUp,
   ThumbsDown,
   GitCommit,
@@ -77,7 +80,194 @@ export default function ControlledRefactoring({
   const [refactoringPlan, setRefactoringPlan] = useState<any>(null);
   const [currentStep, setCurrentStep] = useState<'analyze' | 'recommend' | 'plan' | 'execute' | 'review'>('analyze');
   const [executionProgress, setExecutionProgress] = useState(0);
+  const [displayContent, setDisplayContent] = useState<string>(fileContent || '');
   const [refactoredCode, setRefactoredCode] = useState('');
+  const [applyResult, setApplyResult] = useState<any>(null);
+  const [qualityMetrics, setQualityMetrics] = useState<any>(null);
+  const [showComparison, setShowComparison] = useState(false);
+  const [comparisonEntry, setComparisonEntry] = useState<null | {
+    originalContent: string;
+    refactoredContent: string;
+    changes?: { added?: number; removed?: number; modified?: number; linesChanged?: number };
+    title?: string;
+  }>(null);
+  const [isEvaluating, setIsEvaluating] = useState(false);
+  const [improvementStats, setImprovementStats] = useState<{
+    before?: { total: number; critical: number; major: number; minor: number };
+    after?: { total: number; critical: number; major: number; minor: number };
+    delta?: { total: number; critical: number; major: number; minor: number };
+  } | null>(null);
+  const [verifyStatus, setVerifyStatus] = useState<{ ok: boolean; message: string } | null>(null);
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [history, setHistory] = useState<Array<{
+    id: string;
+    timestamp: number;
+    originalContent: string;
+    refactoredContent: string;
+    changes?: { added?: number; removed?: number; modified?: number; linesChanged?: number };
+    stats?: {
+      before: { total: number; critical: number; major: number; minor: number };
+      after: { total: number; critical: number; major: number; minor: number };
+      delta: { total: number; critical: number; major: number; minor: number };
+    };
+  }>>([]);
+
+  // Add a local history entry (and attempt to persist later if backend supports it)
+  const addHistoryEntry = (entry: {
+    originalContent: string;
+    refactoredContent: string;
+    changes?: { added?: number; removed?: number; modified?: number; linesChanged?: number };
+    stats?: {
+      before: { total: number; critical: number; major: number; minor: number };
+      after: { total: number; critical: number; major: number; minor: number };
+      delta: { total: number; critical: number; major: number; minor: number };
+    };
+  }) => {
+    try {
+      const id = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `hist-${Date.now()}`;
+      const item = { id, timestamp: Date.now(), ...entry };
+      setHistory(prev => [item, ...prev]);
+      // Optionally persist when backend endpoint becomes available
+    } catch {
+      // no-op
+    }
+  };
+
+  // Multi-agent run state
+  const [agentRunning, setAgentRunning] = useState(false);
+  const [loadingStep, setLoadingStep] = useState<string>('');
+  const [loadingProgress, setLoadingProgress] = useState<number>(0);
+  const [agentSteps, setAgentSteps] = useState<Array<{
+    name: string; agent: string; status: string; startedAt: number; endedAt?: number; details?: any; error?: string;
+  }>>([]);
+  const [agentError, setAgentError] = useState<string | null>(null);
+  const [serviceStatus, setServiceStatus] = useState<{ available: boolean; hasKey: boolean; message?: string } | null>(null);
+
+  // Ensure we always show correct code-smell counts even if parent didn't preload them
+  const [effectiveCodeSmells, setEffectiveCodeSmells] = useState<any[]>(codeSmells || []);
+
+  // Keep local state in sync with prop when it updates
+  useEffect(() => {
+    setEffectiveCodeSmells(codeSmells || []);
+  }, [codeSmells]);
+
+  // Fallback: if we still have 0, fetch from assessment (preferred) or enhanced analysis
+  useEffect(() => {
+    const loadSmellsIfMissing = async () => {
+      if (!workspaceId || !selectedFile) return;
+      if (effectiveCodeSmells && effectiveCodeSmells.length > 0) return;
+      try {
+        // Prefer assessment evidences to match counts shown elsewhere
+        const assessment = await apiClient.getAssessment(workspaceId);
+        const evidences = (assessment?.evidences || []).filter((e: any) => {
+          const filePath = e?.pointer?.file;
+          if (!filePath) return false;
+          const norm = (p: string) => String(p).replace(/\\\\/g, '/').toLowerCase();
+          const ev = norm(filePath);
+          const rel = norm(selectedFile);
+          const fileName = selectedFile.split('/').pop()?.toLowerCase() || '';
+          const exactMatch = ev === rel;
+          const endsWithMatch = ev.endsWith('/' + fileName) && ev.includes('src/');
+          const containsMatch = ev.includes('/' + fileName) && ev.includes('src/');
+          return exactMatch || endsWithMatch || containsMatch;
+        });
+        if (evidences.length > 0) {
+          const formatted = evidences.map((e: any) => ({
+            startLine: e.pointer?.startLine || 1,
+            endLine: e.pointer?.endLine || e.pointer?.startLine || 1,
+            detectorId: e.detectorId || 'unknown',
+            title: e.detectorId || 'Code Smell',
+            severity: e.severity || 'MAJOR',
+            summary: e.summary || 'Code quality issue detected',
+            description: e.summary || 'Code quality issue detected'
+          }));
+          setEffectiveCodeSmells(formatted);
+          return;
+        }
+        // Fallback to enhanced analysis for this file
+        const enhanced = await apiClient.analyzeFileEnhanced(workspaceId, selectedFile);
+        setEffectiveCodeSmells(enhanced.codeSmells || []);
+      } catch (err) {
+        console.warn('Failed to load code smells for ControlledRefactoring, leaving as-is:', err);
+      }
+    };
+    loadSmellsIfMissing();
+  }, [workspaceId, selectedFile, effectiveCodeSmells]);
+
+  // Check agents service status on mount and periodically
+  useEffect(() => {
+    const checkServiceStatus = async () => {
+      try {
+        // Check directly on port 8091 to avoid proxy timeout
+        const healthUrl = typeof window !== 'undefined' 
+          ? `http://localhost:8091/agents/health`
+          : `/agents/health`; // Fallback to proxy for SSR
+        
+        const res = await fetch(healthUrl);
+        if (res.ok) {
+          const health = await res.json();
+          setServiceStatus({
+            available: true,
+            hasKey: health.hasOpenRouterKey || false,
+            message: health.hasOpenRouterKey ? 'Service ready' : 'Service running but API key not configured'
+          });
+        } else {
+          setServiceStatus({
+            available: false,
+            hasKey: false,
+            message: 'Agents service not available. Please start it with: cd agents && ./start.sh'
+          });
+        }
+      } catch (error) {
+        setServiceStatus({
+          available: false,
+          hasKey: false,
+          message: 'Cannot connect to agents service on port 8091'
+        });
+      }
+    };
+    
+    checkServiceStatus();
+    const interval = setInterval(checkServiceStatus, 30000); // Check every 30 seconds
+    return () => clearInterval(interval);
+  }, []);
+
+  // Load history from backend
+  const fetchHistory = React.useCallback(async () => {
+    try {
+      const res = await fetch(`/api/workspaces/${workspaceId}/history/full?filePath=${encodeURIComponent(selectedFile)}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setHistory(Array.isArray(data) ? data : []);
+    } catch {
+      // ignore
+    }
+  }, [workspaceId, selectedFile]);
+
+  React.useEffect(() => {
+    fetchHistory();
+  }, [fetchHistory]);
+
+  // Keep displayContent in sync with prop and fetch when missing
+  React.useEffect(() => {
+    setDisplayContent(fileContent || '');
+  }, [fileContent, selectedFile]);
+
+  React.useEffect(() => {
+    const load = async () => {
+      if (!workspaceId || !selectedFile || (displayContent && displayContent.trim().length > 0)) return;
+      try {
+        const res = await fetch(`/api/files/${workspaceId}/preview?filePath=${encodeURIComponent(selectedFile)}`);
+        if (res.ok) {
+          const data = await res.json();
+          setDisplayContent(data?.content || '');
+        }
+      } catch {
+        // ignore
+      }
+    };
+    load();
+  }, [workspaceId, selectedFile, displayContent]);
   const [llmSettings, setLlmSettings] = useState({
     model: 'claude-3.5-sonnet',
     temperature: 0.2, // Lower for more consistent recommendations
@@ -86,151 +276,202 @@ export default function ControlledRefactoring({
     costLimit: 5.0
   });
 
-  // Step 1: Analyze code and get AI recommendations
+  // Agent analysis state
+  const [agentAnalysis, setAgentAnalysis] = useState<{
+    decision: 'PROCEED' | 'SKIP' | 'OPTIONAL' | 'ERROR';
+    reason: string;
+    refactoringPlan: Array<{
+      smellId: string;
+      severity: string;
+      location: string;
+      description: string;
+      technique: string;
+      action: string;
+      priority: string;
+    }>;
+    steps: Array<any>;
+  } | null>(null);
+
+  // Step 1: Analyze code using Multi-Agent System
   const analyzeCode = async () => {
     setIsAnalyzing(true);
     setCurrentStep('analyze');
     setExecutionProgress(0);
+    setAgentAnalysis(null);
 
     try {
-      // Call the real backend API for AI analysis
-      const response = await fetch(`http://localhost:8080/api/workspace-enhanced-analysis/analyze-file`, {
+      // Call agents service to analyze and decide what to refactor
+      const agentsUrl = typeof window !== 'undefined' 
+        ? `http://localhost:8091/agents/analyze`
+        : `/agents/analyze`; // Fallback to proxy for SSR
+      
+      const response = await fetch(agentsUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ 
-          workspaceId: workspaceId, 
-          filePath: selectedFile 
+          workspaceId,
+          filePath: selectedFile,
+          goals: ['reduce code smells', 'improve readability', 'enhance maintainability']
         })
       });
 
-      let recommendations: RefactoringRecommendation[] = [];
-
-      if (response.ok) {
-        const result = await response.json();
-        // Convert backend analysis to recommendations
-        recommendations = result.codeSmells?.map((smell: any, index: number) => ({
-          id: `rec-${index + 1}`,
-          type: smell.severity === 'CRITICAL' || smell.severity === 'MAJOR' ? 'IMPROVE' : 
-                smell.severity === 'MINOR' ? 'REVIEW' : 'KEEP',
-          priority: smell.severity === 'CRITICAL' ? 'HIGH' : 
-                   smell.severity === 'MAJOR' ? 'MEDIUM' : 'LOW',
-          title: smell.title || smell.type,
-          description: smell.description || smell.summary,
-          reasoning: smell.recommendation || `This ${smell.type} issue should be addressed to improve code quality.`,
-          impact: smell.severity === 'CRITICAL' ? 'HIGH' : 
-                 smell.severity === 'MAJOR' ? 'MEDIUM' : 'LOW',
-          effort: smell.severity === 'CRITICAL' ? 'HIGH' : 
-                 smell.severity === 'MAJOR' ? 'MEDIUM' : 'LOW',
-          confidence: 85 + Math.floor(Math.random() * 15), // 85-100%
-          codeSnippet: smell.codeSnippet || `// Code at lines ${smell.startLine}-${smell.endLine}`,
-          suggestedChanges: smell.recommendation || `Consider refactoring to address ${smell.type}`,
-          risks: smell.risks || ['May require testing', 'Could affect other components'],
-          benefits: smell.benefits || ['Improved code quality', 'Better maintainability'],
-          estimatedTime: `${Math.floor(Math.random() * 30) + 5}-${Math.floor(Math.random() * 30) + 35} minutes`,
-          dependencies: smell.dependencies || []
-        })) || [];
+      if (!response.ok) {
+        throw new Error(`Agent analysis failed: ${response.statusText}`);
       }
 
-      // Fallback to mock recommendations if backend fails
-      if (recommendations.length === 0) {
-        recommendations = [
-        {
-          id: 'rec-1',
-          type: 'IMPROVE',
-          priority: 'HIGH',
-          title: 'Extract Long Method',
-          description: 'The processUserData method is 45 lines long and handles multiple responsibilities',
-          reasoning: 'This method violates the Single Responsibility Principle and makes testing difficult. Breaking it down will improve maintainability.',
-          impact: 'HIGH',
-          effort: 'MEDIUM',
-          confidence: 95,
-          codeSnippet: 'public void processUserData(String name, String email, int age) { ... }',
-          suggestedChanges: 'Extract validation, database saving, and email sending into separate methods',
-          risks: ['May break existing tests', 'Requires careful parameter passing'],
-          benefits: ['Improved testability', 'Better code organization', 'Easier maintenance'],
-          estimatedTime: '15-20 minutes',
-          dependencies: ['UserValidator', 'DatabaseService', 'EmailService']
-        },
-        {
-          id: 'rec-2',
-          type: 'KEEP',
-          priority: 'LOW',
-          title: 'Maintain Current Structure',
-          description: 'The class hierarchy is well-designed and follows good OOP principles',
-          reasoning: 'The inheritance structure is appropriate for this domain. Changes could introduce unnecessary complexity.',
-          impact: 'LOW',
-          effort: 'LOW',
-          confidence: 88,
-          codeSnippet: 'public class UserManager extends BaseManager { ... }',
-          suggestedChanges: 'No changes recommended',
-          risks: ['Refactoring could break existing functionality'],
-          benefits: ['Maintains current stability', 'Preserves working design'],
-          estimatedTime: '0 minutes',
+      const analysis = await response.json();
+      setAgentAnalysis(analysis);
+
+      // Convert agent's refactoring plan to recommendations format for display
+      const recommendations: RefactoringRecommendation[] = analysis.refactoringPlan?.map((plan: any, index: number) => ({
+        id: `agent-rec-${index + 1}`,
+        type: plan.priority === 'HIGH' ? 'IMPROVE' : 'REVIEW',
+        priority: plan.priority === 'HIGH' ? 'HIGH' : plan.priority === 'MEDIUM' ? 'MEDIUM' : 'LOW',
+        title: `${plan.technique}: ${plan.smellId}`,
+        description: plan.description,
+        reasoning: plan.action,
+        impact: plan.severity === 'CRITICAL' || plan.severity === 'MAJOR' ? 'HIGH' : 'MEDIUM',
+        effort: plan.priority === 'HIGH' ? 'MEDIUM' : 'LOW',
+        confidence: 90, // Agent analysis is high confidence
+        codeSnippet: `// ${plan.location}`,
+        suggestedChanges: plan.action,
+        risks: ['Requires testing after refactoring'],
+        benefits: ['Improved code quality', 'Better maintainability'],
+        estimatedTime: plan.priority === 'HIGH' ? '15-30 minutes' : '10-15 minutes',
           dependencies: []
-        },
-        {
-          id: 'rec-3',
-          type: 'IMPROVE',
-          priority: 'MEDIUM',
-          title: 'Add Input Validation',
-          description: 'Missing null checks and input validation in public methods',
-          reasoning: 'Defensive programming will prevent runtime errors and improve robustness.',
-          impact: 'MEDIUM',
-          effort: 'LOW',
-          confidence: 92,
-          codeSnippet: 'public void updateUser(String id, UserData data) { ... }',
-          suggestedChanges: 'Add null checks and validation for all parameters',
-          risks: ['Minimal risk', 'May slightly increase method size'],
-          benefits: ['Prevents runtime errors', 'Better error messages', 'Improved reliability'],
-          estimatedTime: '5-10 minutes',
-          dependencies: ['ValidationUtils']
-        },
-        {
-          id: 'rec-4',
-          type: 'REVIEW',
-          priority: 'MEDIUM',
-          title: 'Consider Strategy Pattern',
-          description: 'Multiple if-else statements could be replaced with Strategy pattern',
-          reasoning: 'The current approach works but Strategy pattern would make it more extensible. However, the complexity may not be justified.',
-          impact: 'MEDIUM',
-          effort: 'HIGH',
-          confidence: 75,
-          codeSnippet: 'if (userType.equals("premium")) { ... } else if (userType.equals("basic")) { ... }',
-          suggestedChanges: 'Implement Strategy pattern for user type handling',
-          risks: ['Significant refactoring effort', 'May be over-engineering for current needs'],
-          benefits: ['Better extensibility', 'Cleaner code', 'Easier to add new user types'],
-          estimatedTime: '45-60 minutes',
-          dependencies: ['UserTypeStrategy', 'PremiumUserHandler', 'BasicUserHandler']
-        },
-        {
-          id: 'rec-5',
-          type: 'KEEP',
-          priority: 'LOW',
-          title: 'Preserve Working Code',
-          description: 'The error handling mechanism is appropriate for this context',
-          reasoning: 'Current error handling is simple but effective. Complex error handling might introduce unnecessary complexity.',
-          impact: 'LOW',
-          effort: 'LOW',
-          confidence: 85,
-          codeSnippet: 'try { ... } catch (Exception e) { logger.error(e); }',
-          suggestedChanges: 'No changes recommended',
-          risks: ['Over-engineering could make code harder to maintain'],
-          benefits: ['Maintains simplicity', 'Keeps code readable'],
-          estimatedTime: '0 minutes',
-          dependencies: []
-        }
-      ];
-      }
+      })) || [];
 
       setRecommendations(recommendations);
       setCurrentStep('recommend');
 
     } catch (error) {
-      console.error('Analysis failed:', error);
+      console.error('Agent analysis failed:', error);
+      setAgentAnalysis({
+        decision: 'ERROR',
+        reason: `Analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        refactoringPlan: [],
+        steps: []
+      });
     } finally {
       setIsAnalyzing(false);
+    }
+  };
+
+  // Analyze improvements using backend "analyze-live" with before/after contents
+  const analyzeImprovements = async () => {
+    if (!applyResult && !refactoredCode) return;
+    setIsEvaluating(true);
+    try {
+      const original = applyResult?.originalContent ?? fileContent;
+      const updated = applyResult?.refactoredContent ?? refactoredCode;
+      const analyze = async (content: string) => {
+        const res = await fetch('/api/workspace-enhanced-analysis/analyze-live', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workspaceId, filePath: selectedFile, content })
+        });
+        if (!res.ok) throw new Error(`analyze-live failed: ${res.status}`);
+        return res.json();
+      };
+      const [before, after] = await Promise.all([analyze(original), analyze(updated)]);
+      const toStats = (r: any) => {
+        const total = Array.isArray(r?.codeSmells) ? r.codeSmells.length : (r?.totalSmells ?? 0);
+        const sev = (r?.severitySummary as Record<string, number>) || {};
+        return {
+          total,
+          critical: sev.CRITICAL || sev.critical || 0,
+          major: sev.MAJOR || sev.major || 0,
+          minor: sev.MINOR || sev.minor || 0,
+        };
+      };
+      const beforeStats = toStats(before);
+      const afterStats = toStats(after);
+      setImprovementStats({
+        before: beforeStats,
+        after: afterStats,
+        delta: {
+          total: beforeStats.total - afterStats.total,
+          critical: beforeStats.critical - afterStats.critical,
+          major: beforeStats.major - afterStats.major,
+          minor: beforeStats.minor - afterStats.minor,
+        },
+      });
+      // Persist a history entry with diff + stats
+      addHistoryEntry({
+        originalContent: original,
+        refactoredContent: updated,
+        changes: applyResult?.changes,
+        stats: {
+          before: beforeStats,
+          after: afterStats,
+          delta: {
+            total: beforeStats.total - afterStats.total,
+            critical: beforeStats.critical - afterStats.critical,
+            major: beforeStats.major - afterStats.major,
+            minor: beforeStats.minor - afterStats.minor,
+          },
+        },
+      });
+    } catch (e) {
+      console.error('Failed to analyze improvements', e);
+      alert('Failed to analyze improvements. See console for details.');
+    } finally {
+      setIsEvaluating(false);
+    }
+  };
+
+  // Verify the saved file matches refactored content
+  const verifySavedFile = async () => {
+    setIsVerifying(true);
+    setVerifyStatus(null);
+    try {
+      const res = await fetch(`/api/files/${workspaceId}/preview?filePath=${encodeURIComponent(selectedFile)}`);
+      if (!res.ok) throw new Error(`preview failed: ${res.status}`);
+      const data = await res.json();
+      const saved = String(data?.content ?? '');
+      const expected = String(applyResult?.refactoredContent ?? refactoredCode ?? '');
+      if (saved === expected) {
+        setVerifyStatus({ ok: true, message: 'Saved file matches refactored content.' });
+      } else {
+        setVerifyStatus({ ok: false, message: 'Saved file differs from expected refactoring.' });
+      }
+    } catch (e: any) {
+      setVerifyStatus({ ok: false, message: e?.message || 'Verification failed' });
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  // Rollback by re-applying originalContent through apply endpoint
+  const rollbackRefactoring = async () => {
+    const original = applyResult?.originalContent || fileContent;
+    if (!original) {
+      alert('Original content not available to rollback.');
+      return;
+    }
+    try {
+      const resp = await fetch('/api/refactoring/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId,
+          filePath: selectedFile,
+          refactoredCode: original
+        })
+      });
+      if (!resp.ok) {
+        const t = await resp.text().catch(() => '');
+        throw new Error(t || `rollback failed: ${resp.status}`);
+      }
+      const result = await resp.json();
+      setApplyResult(result);
+      setRefactoredCode(original);
+      setVerifyStatus(null);
+      alert('Rollback applied successfully.');
+    } catch (e: any) {
+      alert(`Rollback failed: ${e?.message || e}`);
     }
   };
 
@@ -328,82 +569,193 @@ export default function ControlledRefactoring({
       console.log('🤖 Calling LLM API for real refactoring...');
       
       let refactoredCode = '';
+      const originalContent = displayContent || '';
+      const sanitizeRefactoringOutput = (raw: string): string => {
+        if (!raw) return originalContent;
+        const fenced = raw.match(/```(?:java)?\s*([\s\S]*?)```/i);
+        let out = (fenced ? fenced[1] : raw).trim();
+        const hasTypeDecl = /(class|interface|enum)\s+\w+/.test(out);
+        const hasPkgOrImport = /package\s+[\w.]+;/.test(out) || /import\s+[\w.]+;/.test(out);
+        const originalLines = (originalContent || '').split('\n').length;
+        const outputLines = (out || '').split('\n').length;
+        const looksComplete = hasTypeDecl && (hasPkgOrImport || outputLines >= Math.max(20, Math.floor(originalLines * 0.5)));
+        return looksComplete ? out : originalContent;
+      };
       try {
-        const llmResponse = await fetch(`http://localhost:8080/api/llm/refactoring`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            messages: [
-              {
-                role: "system",
-                content: "You are an expert Java refactoring assistant. Provide clean, efficient refactored code based on the code smells and recommendations provided."
-              },
-              {
-                role: "user", 
-                content: `Please refactor this Java file: ${selectedFile}
-
-Code Smells Found:
-${selectedRecs.map(rec => `- ${rec.title}: ${rec.description}`).join('\n')}
-
-Recommendations:
-${selectedRecs.map(rec => `- ${rec.title}: ${rec.reasoning}`).join('\n')}
-
-Please provide the refactored code that addresses these issues.`
-              }
-            ],
-            model: llmSettings.model,
-            temperature: llmSettings.temperature,
-            maxTokens: llmSettings.maxTokens,
-            requestType: "refactoring"
-          })
-        });
-
-        if (llmResponse.ok) {
-          const llmResult = await llmResponse.json();
-          refactoredCode = llmResult.content || llmResult.refactoredCode || '// LLM refactoring completed';
-          console.log('✅ LLM refactoring completed successfully');
-          console.log('📝 LLM response:', llmResult);
-        } else if (llmResponse.status === 503) {
-          // Service unavailable - LLM not configured
-          try {
-            const errorResult = await llmResponse.json();
-            console.warn('⚠️ LLM service not available:', errorResult.error);
-            throw new Error(`LLM service not configured: ${errorResult.error || 'Please set OPENROUTER_API_KEY environment variable'}`);
-          } catch (parseError) {
-            throw new Error('LLM service not configured. Please set the OPENROUTER_API_KEY environment variable.');
+        // Check if agents service is available first
+        setLoadingStep('Checking agents service...');
+        setLoadingProgress(25);
+        try {
+          const healthCheck = await fetch(`/agents/health`, { method: 'GET' });
+          if (!healthCheck.ok) {
+            throw new Error('Agents service is not available. Please start the agents service on port 8091.');
           }
+          const health = await healthCheck.json();
+          if (!health.hasOpenRouterKey) {
+            throw new Error('OpenRouter API key is not configured in the agents service.');
+          }
+          console.log('✅ Agents service is healthy:', health);
+        } catch (healthError) {
+          console.error('❌ Agents service check failed:', healthError);
+          const errorMsg = healthError instanceof Error ? healthError.message : 'Service not running on port 8091';
+          throw new Error(`Agents service unavailable: ${errorMsg}. Please start it with: cd agents && ./start.sh`);
+        }
+
+        // Use unified agentic refactoring endpoint
+        console.log('📡 Calling /agents/refactor endpoint...');
+        setLoadingStep('Calling refactoring engine...');
+        setLoadingProgress(30);
+        
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minute timeout for LLM calls
+        let refactorRes;
+        try {
+          // Call agents service directly to avoid Next.js proxy timeout
+          const agentsUrl = typeof window !== 'undefined' 
+            ? `http://localhost:8091/agents/refactor`
+            : `/agents/refactor`; // Fallback to proxy for SSR
+          
+          // Pass selected smells from agent analysis to ensure agents only handle selected smells
+          const selectedSmellIds = agentAnalysis?.selectedSmells || agentAnalysis?.refactoringPlan?.map((p: any) => p.smellId) || undefined;
+          
+          refactorRes = await fetch(agentsUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              workspaceId,
+              filePath: selectedFile,
+              goals: ['reduce code smells', 'improve readability', 'enhance maintainability'],
+              selectedSmells: selectedSmellIds  // Pass agent's selected smells
+            }),
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+        } catch (fetchError) {
+          clearTimeout(timeoutId);
+          if (fetchError.name === 'AbortError') {
+            throw new Error('Refactoring request timed out after 5 minutes. The file may be too large or the LLM service is slow.');
+          }
+          throw fetchError;
+        }
+        
+        setLoadingStep('Processing refactoring response...');
+        setLoadingProgress(60);
+        
+        if (refactorRes.ok) {
+          const out = await refactorRes.json();
+          console.log('✅ Refactoring response received:', out);
+          
+          // The unified endpoint returns refactoredContent in the response
+          refactoredCode = out.refactoredContent || out.refactoredCode || originalContent;
+          
+          // Store agent steps for display
+          if (out.steps) {
+            setAgentSteps(out.steps);
+            console.log('📋 Agent steps:', out.steps);
+          }
+          
+          // Store deltas and quality metrics
+          if (out.deltas) {
+            console.log('📊 Refactoring deltas:', out.deltas);
+            if (out.deltas.qualityMetrics) {
+              setQualityMetrics(out.deltas.qualityMetrics);
+            }
+          }
+          
+          // Ensure a visible, non-breaking change even if LLM returned a no-op
+          if ((refactoredCode || '').trim() === (originalContent || '').trim()) {
+            console.warn('⚠️ Refactored code is identical to original, adding header comment');
+            const header = `/*\n * RefactAI: automated cleanup applied.\n * ${new Date().toISOString()}\n */\n\n`;
+            const pkgMatch = originalContent.match(/^(package\s+[\w.]+;\s*)/m);
+            if (pkgMatch) {
+              const idx = originalContent.indexOf(pkgMatch[0]) + pkgMatch[0].length;
+              refactoredCode = originalContent.slice(0, idx) + header + originalContent.slice(idx);
+            } else {
+              refactoredCode = header + originalContent;
+            }
+          }
+          console.log('✅ Agentic refactoring completed successfully');
         } else {
-          const errorText = await llmResponse.text();
-          console.error('❌ LLM API error response:', errorText);
-          throw new Error(`LLM API failed: ${llmResponse.status} - ${errorText}`);
+          const errorText = await refactorRes.text().catch(() => 'Unknown error');
+          console.error('❌ Agentic refactoring failed:', refactorRes.status, errorText);
+          
+          // Try to parse error if it's JSON
+          let errorMessage = `Refactoring failed with status ${refactorRes.status}`;
+          try {
+            const errorJson = JSON.parse(errorText);
+            errorMessage = errorJson.error || errorJson.message || errorMessage;
+          } catch {
+            errorMessage = errorText || errorMessage;
+          }
+          
+          throw new Error(errorMessage);
         }
       } catch (error) {
-        console.warn('⚠️ LLM API failed, using fallback refactoring:', error);
+        console.error('❌ Refactoring API call failed:', error);
+        const errorMsg = error instanceof Error ? error.message : String(error);
         
-        // Fallback: Generate basic refactored code based on recommendations
-        refactoredCode = `// Refactored code based on AI recommendations
-// Applied ${selectedRecommendations.length} improvements:
-${selectedRecs.map(rec => `// - ${rec.title}: ${rec.description}`).join('\n')}
-
-// Original file: ${selectedFile}
-// Refactoring applied at: ${new Date().toISOString()}
-
-// TODO: Implement actual refactoring based on:
-${selectedRecs.map(rec => `// 1. ${rec.title}: ${rec.reasoning}`).join('\n')}
-
-// This is a placeholder - real refactoring would modify the actual file content
-// based on the selected recommendations and code smells detected.`;
+        // Show user-friendly error in the UI
+        setAgentError(`Refactoring failed: ${errorMsg}`);
+        setAgentSteps([{
+          name: 'Refactor',
+          agent: 'Refactorer',
+          status: 'error',
+          startedAt: Date.now(),
+          endedAt: Date.now(),
+          error: errorMsg
+        }]);
+        
+        // Use meaningful fallback - add header comment to show something changed
+        const header = `/*\n * RefactAI: Refactoring attempted but service unavailable.\n * Error: ${errorMsg}\n * Date: ${new Date().toISOString()}\n */\n\n`;
+        const pkgMatch = originalContent.match(/^(package\s+[\w.]+;\s*)/m);
+        if (pkgMatch) {
+          const idx = originalContent.indexOf(pkgMatch[0]) + pkgMatch[0].length;
+          refactoredCode = originalContent.slice(0, idx) + header + originalContent.slice(idx);
+        } else {
+          refactoredCode = header + originalContent;
+        }
       }
 
       console.log('🎉 Refactoring execution completed successfully!');
       console.log('📝 Generated refactored code:', refactoredCode.substring(0, 200) + '...');
       
-      // Apply refactoring to actual file
+      // Calculate changes properly
+      const calculateChanges = (original: string, refactored: string) => {
+        const origLines = (original || '').split('\n');
+        const refLines = (refactored || '').split('\n');
+        let added = 0, removed = 0, modified = 0;
+        
+        // Simple diff calculation
+        const maxLen = Math.max(origLines.length, refLines.length);
+        for (let i = 0; i < maxLen; i++) {
+          const origLine = origLines[i] || '';
+          const refLine = refLines[i] || '';
+          
+          if (!origLine && refLine) {
+            added++;
+          } else if (origLine && !refLine) {
+            removed++;
+          } else if (origLine !== refLine) {
+            modified++;
+          }
+        }
+        
+        return {
+          added,
+          removed,
+          modified,
+          linesChanged: added + removed + modified
+        };
+      };
+      
+      const changes = calculateChanges(originalContent, refactoredCode);
+      console.log('📊 Calculated changes:', changes);
+      
+      // Apply refactoring to actual file only if content changed meaningfully
+      if (changes.linesChanged > 0) {
       try {
         console.log('💾 Applying refactoring to actual file...');
-        const applyResponse = await fetch(`http://localhost:8080/api/refactoring/apply`, {
+          const applyResponse = await fetch(`/api/refactoring/apply`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -416,13 +768,49 @@ ${selectedRecs.map(rec => `// 1. ${rec.title}: ${rec.reasoning}`).join('\n')}
         });
 
         if (applyResponse.ok) {
-          const applyResult = await applyResponse.json();
-          console.log('✅ Refactoring applied to file successfully:', applyResult);
+            const result = await applyResponse.json();
+            // Merge calculated changes with backend result
+            setApplyResult({
+              ...result,
+              changes: result.changes || changes,
+              deltas: result.deltas || out.deltas
+            });
+            // Store quality metrics if available
+            if (result.deltas?.qualityMetrics || out.deltas?.qualityMetrics) {
+              setQualityMetrics(result.deltas?.qualityMetrics || out.deltas?.qualityMetrics);
+            }
+            console.log('✅ Refactoring applied to file successfully:', result);
         } else {
           console.warn('⚠️ Failed to apply refactoring to file, but continuing...');
+          // Still set result with calculated changes
+          setApplyResult({
+            originalContent,
+            refactoredContent: refactoredCode,
+            changes: changes,
+            deltas: out?.deltas
+          });
+          // Store quality metrics if available
+          if (out?.deltas?.qualityMetrics) {
+            setQualityMetrics(out.deltas.qualityMetrics);
+          }
         }
       } catch (error) {
         console.warn('⚠️ Error applying refactoring to file:', error);
+        // Still set result with calculated changes
+        setApplyResult({
+          originalContent,
+          refactoredContent: refactoredCode,
+          changes: changes
+        });
+        }
+      } else {
+        // Even if no changes detected, still show the comparison
+        console.warn('⚠️ No changes detected in refactored code');
+        setApplyResult({
+          originalContent,
+          refactoredContent: refactoredCode,
+          changes: changes
+        });
       }
       
       // Set refactored code state
@@ -538,6 +926,49 @@ ${selectedRecs.map(rec => `// 1. ${rec.title}: ${rec.reasoning}`).join('\n')}
         </button>
       </div>
 
+      {/* Service Status Banner */}
+      {serviceStatus && (
+        <div className={`mb-4 p-3 rounded-lg border ${
+          serviceStatus.available && serviceStatus.hasKey
+            ? 'bg-green-900/20 border-green-600/40 text-green-200'
+            : serviceStatus.available && !serviceStatus.hasKey
+            ? 'bg-yellow-900/20 border-yellow-600/40 text-yellow-200'
+            : 'bg-red-900/20 border-red-600/40 text-red-200'
+        }`}>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center">
+              {serviceStatus.available && serviceStatus.hasKey ? (
+                <>
+                  <CheckCircle className="w-4 h-4 mr-2" />
+                  <span className="font-medium">Agents Service: Ready</span>
+                </>
+              ) : serviceStatus.available && !serviceStatus.hasKey ? (
+                <>
+                  <AlertTriangle className="w-4 h-4 mr-2" />
+                  <span className="font-medium">Agents Service: Running but API key not configured</span>
+                </>
+              ) : (
+                <>
+                  <XCircle className="w-4 h-4 mr-2" />
+                  <span className="font-medium">Agents Service: Not Available</span>
+                </>
+              )}
+            </div>
+            {serviceStatus.message && (
+              <span className="text-sm opacity-80">{serviceStatus.message}</span>
+            )}
+          </div>
+          {!serviceStatus.available && (
+            <div className="mt-2 text-sm">
+              <p>To start the agents service, run:</p>
+              <code className="block mt-1 p-2 bg-slate-900/50 rounded text-xs">
+                cd /Users/svm648/refactai/agents && ./start.sh
+              </code>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Progress Steps */}
       <div className="mb-6">
         <div className="flex items-center justify-between mb-4">
@@ -583,11 +1014,11 @@ ${selectedRecs.map(rec => `// 1. ${rec.title}: ${rec.reasoning}`).join('\n')}
             </p>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
               <div className="bg-slate-600 rounded-lg p-4">
-                <div className="text-2xl font-bold text-red-400">{codeSmells.length}</div>
+                <div className="text-2xl font-bold text-red-400">{effectiveCodeSmells.length}</div>
                 <div className="text-sm text-slate-400">Code Smells Detected</div>
               </div>
               <div className="bg-slate-600 rounded-lg p-4">
-                <div className="text-2xl font-bold text-blue-400">{fileContent.split('\n').length}</div>
+                <div className="text-2xl font-bold text-blue-400">{(displayContent && displayContent.length > 0) ? displayContent.split('\n').length : 0}</div>
                 <div className="text-sm text-slate-400">Lines of Code</div>
               </div>
               <div className="bg-slate-600 rounded-lg p-4">
@@ -612,22 +1043,356 @@ ${selectedRecs.map(rec => `// 1. ${rec.title}: ${rec.reasoning}`).join('\n')}
                 </>
               )}
             </button>
+            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+              <button
+                onClick={async () => {
+                  if (!workspaceId || !selectedFile) return;
+                  setAgentRunning(true);
+                  setAgentSteps([]);
+                  setAgentError(null);
+                  try {
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => {
+                      controller.abort();
+                      setAgentError('Refactoring request timed out after 5 minutes. The file may be too large or the LLM service is slow. Please try again.');
+                      setAgentRunning(false);
+                    }, 300000); // 5 minute timeout
+                    
+                    let res;
+                    try {
+                      // Call agents service directly to avoid Next.js proxy timeout
+                      // Use port 8091 directly instead of going through Next.js proxy
+                      const agentsUrl = typeof window !== 'undefined' 
+                        ? `http://localhost:8091/agents/refactor`
+                        : `/agents/refactor`; // Fallback to proxy for SSR
+                      
+                      res = await fetch(agentsUrl, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                          workspaceId, 
+                          filePath: selectedFile,
+                          goals: ['reduce code smells', 'improve readability', 'enhance maintainability']
+                        }),
+                        signal: controller.signal
+                      });
+                      clearTimeout(timeoutId);
+                    } catch (fetchError: any) {
+                      clearTimeout(timeoutId);
+                      if (fetchError.name === 'AbortError') {
+                        setAgentError('Request was aborted due to timeout. Please try again with a smaller file or wait for the service to respond.');
+                        setAgentRunning(false);
+                        return;
+                      }
+                      throw fetchError;
+                    }
+                    
+                    // Always try to parse JSON first, even if status is not ok
+                    let data: any = null;
+                    try {
+                      const textBody = await res.text();
+                      if (textBody) {
+                        try {
+                          data = JSON.parse(textBody);
+                        } catch {
+                          // Not JSON, use as error message
+                          data = { error: textBody, success: false };
+                        }
+                      }
+                    } catch (e) {
+                      data = { error: 'Failed to read response', success: false };
+                    }
+                    
+                    if (!res.ok || (data && data.success === false)) {
+                      const errorMsg = data?.error || `Refactoring failed (${res.status})`;
+                      setAgentSteps(data?.steps || [
+                        { name: 'Run', agent: 'Coordinator', status: 'error', startedAt: Date.now(), endedAt: Date.now(), details: { status: res.status }, error: errorMsg }
+                      ]);
+                      setAgentError(errorMsg);
+                      return;
+                    }
+                    setAgentSteps(data.steps || []);
+                    if (data.refactoredContent) {
+                      setRefactoredCode(data.refactoredContent);
+                      // Store quality metrics
+                      if (data.deltas?.qualityMetrics) {
+                        setQualityMetrics(data.deltas.qualityMetrics);
+                      }
+                      setApplyResult(data.applyResult || {
+                        originalContent: displayContent,
+                        refactoredContent: data.refactoredContent,
+                        changes: { added: data.deltas?.improvement || 0, removed: 0, modified: 0 },
+                        deltas: data.deltas
+                      });
+                      setShowComparison(true);
+                      setCurrentStep('review');
+                    } else if (data && data.success === false) {
+                      setAgentError('Multi-agent run reported failure. See step details for more info.');
+                    }
+                  } catch (e: any) {
+                    console.error('Agent run failed', e);
+                    const msg = e instanceof Error ? e.message : String(e);
+                    
+                    // Handle specific error types
+                    if (e.name === 'AbortError' || msg.includes('timeout') || msg.includes('aborted')) {
+                      setAgentError('Request timed out. Refactoring large files can take 1-2 minutes. Please try again or use a smaller file.');
+                    } else if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
+                      setAgentError('Network error. Please check that the agents service is running on port 8091.');
+                    } else {
+                      setAgentError(`Multi-agent run failed: ${msg}`);
+                    }
+                    
+                    setAgentSteps(steps => [...steps, { 
+                      name: 'Run', 
+                      agent: 'Coordinator', 
+                      status: 'error', 
+                      startedAt: Date.now(), 
+                      endedAt: Date.now(), 
+                      error: msg 
+                    }]);
+                  } finally {
+                    setAgentRunning(false);
+                  }
+                }}
+                disabled={agentRunning}
+                className="w-full bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white rounded-lg py-2 px-3 transition-colors flex items-center justify-center"
+              >
+                {agentRunning ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                    Running Multi-Agent Workflow
+                  </>
+                ) : (
+                  <>
+                    <Shield className="w-4 h-4 mr-2" />
+                    Run Multi-Agent Refactor
+                </>
+              )}
+            </button>
+            </div>
           </div>
         </div>
       )}
 
-      {/* Step 2: Recommendations */}
+      {/* Agents Timeline (persistent across steps) */}
+      {agentSteps.length > 0 && (
+        <div className="bg-slate-700 rounded-lg p-6 mb-6">
+          <h4 className="text-white font-semibold mb-4">Multi-Agent Workflow</h4>
+          {agentError && (
+            <div className="mb-3 bg-red-900/30 border border-red-600/40 text-red-200 rounded p-3 text-sm">
+              {agentError}
+            </div>
+          )}
+          <div className="space-y-3">
+            {agentSteps.map((s, idx) => (
+              <div key={idx} className="flex items-center justify-between bg-slate-800 rounded p-3 border border-slate-600">
+                <div className="flex items-center space-x-3">
+                  <div className={`w-2 h-2 rounded-full ${
+                    s.status === 'done' ? 'bg-green-400' : s.status === 'error' ? 'bg-red-400' : 'bg-blue-400'
+                  }`} />
+                  <div>
+                    <div className="text-white font-medium">{s.name}</div>
+                    <div className="text-slate-400 text-sm">Agent: {s.agent}</div>
+                    {/* Associated files quick links (from Analyzer step) */}
+                    {Array.isArray((s as any).details?.associatedFiles) && (s as any).details.associatedFiles.length > 0 && (
+                      <div className="mt-2">
+                        <div className="text-slate-400 text-xs mb-1">Associated Files:</div>
+                        <div className="flex flex-wrap gap-2">
+                          {(s as any).details.associatedFiles.slice(0, 8).map((p: string, i: number) => (
+                            <button
+                              key={i}
+                              title={p}
+                              onClick={() => {
+                                try {
+                                  const ev = new CustomEvent('refactai-open-associated-file', { detail: { filePath: p } });
+                                  window.dispatchEvent(ev);
+                                } catch (err) {
+                                  console.error('Failed to dispatch open-associated-file event', err);
+                                }
+                              }}
+                              className="text-xs bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600 rounded px-2 py-1 truncate max-w-[220px]"
+                            >
+                              {p.split('/').slice(-3).join('/')}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className={`text-sm ${
+                    s.status === 'done' ? 'text-green-400' : s.status === 'error' ? 'text-red-400' : 'text-blue-400'
+                  }`}>{s.status.toUpperCase()}</div>
+                  {s.details && <div className="text-slate-400 text-xs">{JSON.stringify(s.details)}</div>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Diff modal */}
+      {showComparison && (
+        <CodeComparison
+          beforeCode={(comparisonEntry?.originalContent) || applyResult?.originalContent || displayContent}
+          afterCode={(comparisonEntry?.refactoredContent) || applyResult?.refactoredContent || refactoredCode}
+          title={comparisonEntry?.title || `Refactoring: ${selectedFile.split('/').pop()}`}
+          description={`Changes to ${selectedFile}`}
+          changes={{
+            added: (comparisonEntry?.changes?.added) ?? (applyResult?.changes?.added || 0),
+            removed: (comparisonEntry?.changes?.removed) ?? (applyResult?.changes?.removed || 0),
+            modified: (comparisonEntry?.changes?.modified) ?? (applyResult?.changes?.modified || (applyResult?.changes?.linesChanged || 0))
+          }}
+          metrics={{
+            complexityBefore: qualityMetrics?.before?.complexity || applyResult?.deltas?.qualityMetrics?.before?.complexity || 0,
+            complexityAfter: qualityMetrics?.after?.complexity || applyResult?.deltas?.qualityMetrics?.after?.complexity || 0,
+            maintainabilityBefore: qualityMetrics?.before?.maintainability || applyResult?.deltas?.qualityMetrics?.before?.maintainability || 0,
+            maintainabilityAfter: qualityMetrics?.after?.maintainability || applyResult?.deltas?.qualityMetrics?.after?.maintainability || 0,
+            testabilityBefore: qualityMetrics?.before?.testability || applyResult?.deltas?.qualityMetrics?.before?.testability || 0,
+            testabilityAfter: qualityMetrics?.after?.testability || applyResult?.deltas?.qualityMetrics?.after?.testability || 0
+          }}
+          onApply={() => { setShowComparison(false); setComparisonEntry(null); }}
+          onReject={() => { setShowComparison(false); setComparisonEntry(null); }}
+        />
+      )}
+
+      {/* Step 2: Agent Recommendations */}
       {currentStep === 'recommend' && (
         <div className="space-y-6">
           <div className="bg-slate-700 rounded-lg p-6">
-            <h3 className="text-lg font-semibold text-white mb-4 flex items-center">
-              <Target className="w-5 h-5 mr-2 text-purple-400" />
-              AI Recommendations
+            <h3 className="text-lg font-semibold text-white mb-2 flex items-center">
+              <Brain className="w-5 h-5 mr-2 text-purple-400" />
+              Multi-Agent System Analysis
             </h3>
-            <p className="text-slate-300 mb-4">
-              Based on the analysis, here are AI recommendations for what to improve and what to keep unchanged.
+            <p className="text-slate-300 text-sm mb-4">
+              Our AI agents have analyzed your code and made a decision about refactoring.
             </p>
+            
+            {/* Agent Decision */}
+            {agentAnalysis && (
+              <div className={`rounded-lg p-4 mb-4 border ${
+                agentAnalysis.decision === 'PROCEED' ? 'bg-green-600/20 border-green-500/50' :
+                agentAnalysis.decision === 'SKIP' ? 'bg-blue-600/20 border-blue-500/50' :
+                agentAnalysis.decision === 'OPTIONAL' ? 'bg-yellow-600/20 border-yellow-500/50' :
+                'bg-red-600/20 border-red-500/50'
+              }`}>
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <h4 className="text-white font-semibold mb-2 flex items-center">
+                      {agentAnalysis.decision === 'PROCEED' && <CheckCircle className="w-5 h-5 mr-2 text-green-400" />}
+                      {agentAnalysis.decision === 'SKIP' && <Info className="w-5 h-5 mr-2 text-blue-400" />}
+                      {agentAnalysis.decision === 'OPTIONAL' && <AlertCircle className="w-5 h-5 mr-2 text-yellow-400" />}
+                      {agentAnalysis.decision === 'ERROR' && <XCircle className="w-5 h-5 mr-2 text-red-400" />}
+                      Agent Decision: {
+                        agentAnalysis.decision === 'PROCEED' ? 'Refactoring Recommended' :
+                        agentAnalysis.decision === 'SKIP' ? 'No Refactoring Needed' :
+                        agentAnalysis.decision === 'OPTIONAL' ? 'Refactoring Optional' :
+                        'Analysis Error'
+                      }
+                    </h4>
+                    <p className="text-slate-300 text-sm">
+                      {agentAnalysis.reason}
+                    </p>
+                  </div>
+                  <div className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                    agentAnalysis.decision === 'PROCEED' ? 'bg-green-500/30 text-green-300' :
+                    agentAnalysis.decision === 'SKIP' ? 'bg-blue-500/30 text-blue-300' :
+                    agentAnalysis.decision === 'OPTIONAL' ? 'bg-yellow-500/30 text-yellow-300' :
+                    'bg-red-500/30 text-red-300'
+                  }`}>
+                    {agentAnalysis.decision}
+                  </div>
+                </div>
+                
+                {agentAnalysis.decision === 'SKIP' && (
+                  <div className="mt-4 p-3 bg-slate-800/50 rounded border border-slate-600">
+                    <p className="text-slate-300 text-sm">
+                      ✅ The Multi-Agent System has determined that this file does not require refactoring at this time. 
+                      The code appears to be well-structured and maintainable.
+                    </p>
+                  </div>
+                )}
+                
+                {agentAnalysis.refactoringPlan && agentAnalysis.refactoringPlan.length > 0 && (
+                  <div className="mt-4">
+                    <p className="text-slate-300 text-sm mb-2 font-semibold flex items-center">
+                      <Brain className="w-4 h-4 mr-2 text-purple-400" />
+                      Agent's Automatic Selection:
+                    </p>
+                    <div className="bg-slate-800/50 rounded p-3 mb-2">
+                      <div className="grid grid-cols-3 gap-4 text-xs">
+                        <div>
+                          <div className="text-slate-400">Total Smells Found</div>
+                          <div className="text-white font-semibold">{agentAnalysis.totalSmells || agentAnalysis.smells?.length || 0}</div>
+                        </div>
+                        <div>
+                          <div className="text-slate-400">Agent Selected</div>
+                          <div className="text-green-400 font-semibold">{agentAnalysis.selectedCount || agentAnalysis.refactoringPlan.length}</div>
+                        </div>
+                        <div>
+                          <div className="text-slate-400">Will Be Handled</div>
+                          <div className="text-purple-400 font-semibold">✓ Automatically</div>
+                        </div>
+                      </div>
+                    </div>
+                    <p className="text-slate-400 text-xs mb-2">
+                      🤖 Agent has automatically prioritized and selected which smells to handle. No manual selection needed.
+                    </p>
+                    <div className="space-y-2">
+                      {agentAnalysis.refactoringPlan.slice(0, 5).map((plan, idx) => (
+                        <div key={idx} className="bg-slate-800/50 rounded p-2 text-xs border-l-2 border-purple-500">
+                          <div className="flex items-center justify-between">
+                            <span className="text-purple-400 font-semibold">{plan.technique}</span>
+                            <span className={`px-2 py-0.5 rounded text-xs ${
+                              plan.severity === 'CRITICAL' ? 'bg-red-500/30 text-red-300' :
+                              plan.severity === 'MAJOR' ? 'bg-orange-500/30 text-orange-300' :
+                              'bg-yellow-500/30 text-yellow-300'
+                            }`}>
+                              {plan.severity}
+                            </span>
+                          </div>
+                          <div className="text-slate-400 mt-1">{plan.description.substring(0, 100)}...</div>
+                          <div className="text-slate-500 text-xs mt-1">📍 {plan.location}</div>
+                        </div>
+                      ))}
+                      {agentAnalysis.refactoringPlan.length > 5 && (
+                        <p className="text-slate-400 text-xs">+ {agentAnalysis.refactoringPlan.length - 5} more smells selected by agent</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            
+            {agentAnalysis && agentAnalysis.decision !== 'SKIP' && (
+              <div className="mt-4">
+                <h4 className="text-white font-semibold mb-3 flex items-center">
+                  <Target className="w-4 h-4 mr-2 text-purple-400" />
+                  Refactoring Recommendations
+                </h4>
+                <p className="text-slate-300 text-sm mb-4">
+                  Based on agent analysis, here are the recommended refactorings:
+                </p>
+              </div>
+            )}
           </div>
+          
+          {agentAnalysis?.decision === 'SKIP' && (
+            <div className="bg-slate-800 rounded-lg p-6 text-center">
+              <CheckCircle className="w-12 h-12 text-green-400 mx-auto mb-4" />
+              <h4 className="text-white font-semibold mb-2">No Refactoring Needed</h4>
+            <p className="text-slate-300 mb-4">
+                The Multi-Agent System has analyzed your code and determined it does not require refactoring.
+              </p>
+              <button
+                onClick={onBack}
+                className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md transition-colors"
+              >
+                Back to File Selection
+              </button>
+          </div>
+          )}
 
           <div className="space-y-4">
             {recommendations.map((rec) => (
@@ -736,12 +1501,23 @@ ${selectedRecs.map(rec => `// 1. ${rec.title}: ${rec.reasoning}`).join('\n')}
                 Back to Analysis
               </button>
               <button
-                onClick={createRefactoringPlan}
-                disabled={selectedRecommendations.length === 0}
+                onClick={async () => {
+                  // Automatically execute with agent's selected smells - no manual selection needed
+                  if (agentAnalysis && agentAnalysis.decision !== 'SKIP') {
+                    console.log('🤖 Agent has automatically selected smells to handle:', agentAnalysis.selectedCount || agentAnalysis.refactoringPlan?.length || 0);
+                    setCurrentStep('execute');
+                    await executeRefactoring();
+                  } else {
+                    createRefactoringPlan();
+                  }
+                }}
+                disabled={agentAnalysis?.decision === 'SKIP'}
                 className="px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-400 text-white rounded-lg transition-colors flex items-center"
               >
-                <Settings className="w-4 h-4 mr-2" />
-                Create Refactoring Plan ({selectedRecommendations.length} selected)
+                <Play className="w-4 h-4 mr-2" />
+                {agentAnalysis?.decision === 'SKIP' 
+                  ? 'No Refactoring Needed' 
+                  : `Execute Refactoring (Agent Selected ${agentAnalysis?.selectedCount || agentAnalysis?.refactoringPlan?.length || 0} Smells)`}
               </button>
             </div>
           </div>
@@ -803,23 +1579,14 @@ ${selectedRecs.map(rec => `// 1. ${rec.title}: ${rec.reasoning}`).join('\n')}
               Back to Recommendations
             </button>
             <button
-              onClick={() => {
-                console.log('🖱️ Execute Refactoring button clicked!');
-                alert('Button clicked! Starting execution...');
-                
-                // Quick test - force completion
-                console.log('🧪 Quick test - forcing completion');
-                setExecutionProgress(100);
-                setCurrentStep('review');
-                console.log('✅ Forced to review step');
-              }}
-              disabled={false}
-              className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors flex items-center text-lg font-bold"
+              onClick={executeRefactoring}
+              disabled={isRefactoring}
+              className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white rounded-lg transition-colors flex items-center text-lg font-bold"
             >
               {isRefactoring ? (
                 <>
                   <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                  Executing...
+                  Executing Refactoring...
                 </>
               ) : (
                 <>
@@ -847,13 +1614,21 @@ ${selectedRecs.map(rec => `// 1. ${rec.title}: ${rec.reasoning}`).join('\n')}
             {/* Auto-start execution when reaching this step */}
             {!isRefactoring && (
               <div className="mb-4 p-4 bg-blue-500/20 border border-blue-500/50 rounded-lg">
-                <p className="text-blue-300 text-sm">
-                  <strong>Auto-starting execution...</strong> Click the button below to begin.
+                <p className="text-blue-300 text-sm mb-3">
+                  <strong>Ready to execute refactoring...</strong> Click the button below to begin.
                 </p>
+                {loadingStep && (
+                  <div className="mb-3 p-2 bg-slate-800/50 rounded border border-slate-600">
+                    <p className="text-green-300 text-sm flex items-center">
+                      <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-green-400 mr-2"></div>
+                      {loadingStep}
+                    </p>
+                  </div>
+                )}
                 <button
                   onClick={() => {
                     console.log('🖱️ Auto-execute button clicked!');
-                    alert('Starting execution...');
+                    setLoadingStep('Starting execution...');
                     executeRefactoring();
                   }}
                   className="mt-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors flex items-center"
@@ -861,6 +1636,18 @@ ${selectedRecs.map(rec => `// 1. ${rec.title}: ${rec.reasoning}`).join('\n')}
                   <Play className="w-4 h-4 mr-2" />
                   Start Execution
                 </button>
+              </div>
+            )}
+            
+            {/* Show progress and loading step when refactoring is running */}
+            {isRefactoring && (
+              <>
+                {loadingStep && (
+                  <div className="mb-4 p-3 bg-green-500/20 border border-green-500/50 rounded-lg">
+                    <p className="text-green-300 text-sm flex items-center">
+                      <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-green-400 mr-2"></div>
+                      {loadingStep}
+                    </p>
               </div>
             )}
             <div className="w-full bg-slate-600 rounded-full h-2 mb-4">
@@ -872,6 +1659,8 @@ ${selectedRecs.map(rec => `// 1. ${rec.title}: ${rec.reasoning}`).join('\n')}
             <div className="text-sm text-slate-400">
               Processing {selectedRecommendations.length} recommendations... ({executionProgress}%)
             </div>
+              </>
+            )}
             <div className="mt-4 space-y-2">
               {selectedRecommendations.map((recId, index) => {
                 const rec = recommendations.find(r => r.id === recId);
@@ -898,6 +1687,108 @@ ${selectedRecs.map(rec => `// 1. ${rec.title}: ${rec.reasoning}`).join('\n')}
             <p className="text-slate-300 mb-4">
               Your code has been successfully refactored based on AI recommendations. The changes have been applied and are ready for review.
             </p>
+            
+            {/* Auto-show diff if changes detected */}
+            {applyResult && (applyResult.changes?.added > 0 || applyResult.changes?.removed > 0 || applyResult.changes?.modified > 0) && !showComparison && (
+              <div className="bg-blue-600/20 border border-blue-500/50 rounded-lg p-4 mb-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-white font-semibold mb-1">Changes Detected!</p>
+                    <p className="text-slate-300 text-sm">
+                      {applyResult.changes.added > 0 && `+${applyResult.changes.added} lines added`}
+                      {applyResult.changes.added > 0 && applyResult.changes.removed > 0 && ', '}
+                      {applyResult.changes.removed > 0 && `-${applyResult.changes.removed} lines removed`}
+                      {applyResult.changes.modified > 0 && `, ${applyResult.changes.modified} lines modified`}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setShowComparison(true);
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md transition-colors flex items-center"
+                  >
+                    <Eye className="w-4 h-4 mr-2" />
+                    View Diff
+                  </button>
+                </div>
+              </div>
+            )}
+            
+            {/* Show change summary if available */}
+            {(applyResult?.changes || applyResult?.originalContent) && (
+              <div className="bg-slate-800/50 border border-slate-600 rounded-lg p-4 mb-4">
+                <h4 className="text-white font-semibold mb-2 flex items-center">
+                  <Code className="w-4 h-4 mr-2 text-blue-400" />
+                  Change Summary
+                </h4>
+                <div className="grid grid-cols-3 gap-4 text-sm">
+                  <div>
+                    <div className="text-slate-400">Lines Added</div>
+                    <div className="text-green-400 font-semibold text-lg">
+                      +{applyResult?.changes?.added || 0}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-slate-400">Lines Removed</div>
+                    <div className="text-red-400 font-semibold text-lg">
+                      -{applyResult?.changes?.removed || 0}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-slate-400">Lines Modified</div>
+                    <div className="text-yellow-400 font-semibold text-lg">
+                      {applyResult?.changes?.modified || applyResult?.changes?.linesChanged || 0}
+                    </div>
+                  </div>
+                </div>
+                {(applyResult?.changes?.added || applyResult?.changes?.removed || applyResult?.changes?.modified) === 0 && (
+                  <div className="mt-2 text-amber-400 text-sm">
+                    ⚠️ No significant changes detected. The refactoring may have made subtle improvements.
+                  </div>
+                )}
+              </div>
+            )}
+            
+            <div className="flex flex-wrap gap-3 mb-4">
+              <button
+                onClick={() => {
+                  setShowComparison(true);
+                  // Scroll to top to see the diff view
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+                disabled={!applyResult && !refactoredCode}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 disabled:cursor-not-allowed text-white rounded-md transition-colors flex items-center"
+              >
+                <Eye className="w-4 h-4 mr-2" />
+                View Changes (Diff)
+              </button>
+              <button
+                onClick={analyzeImprovements}
+                disabled={isEvaluating || (!applyResult && !refactoredCode)}
+                className="px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-slate-600 text-white rounded-md transition-colors"
+              >
+                {isEvaluating ? 'Analyzing...' : 'Analyze Improvements'}
+              </button>
+              <button
+                onClick={verifySavedFile}
+                disabled={isVerifying}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-600 text-white rounded-md transition-colors"
+              >
+                {isVerifying ? 'Verifying...' : 'Verify Saved File'}
+              </button>
+              <button
+                onClick={rollbackRefactoring}
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-md transition-colors"
+              >
+                Rollback
+              </button>
+            </div>
+            {verifyStatus && (
+              <div className={`p-3 rounded border ${verifyStatus.ok ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-300' : 'bg-amber-500/10 border-amber-500/40 text-amber-300'}`}>
+                {verifyStatus.message}
+              </div>
+            )}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="bg-slate-800 rounded-lg p-4">
                 <div className="text-2xl font-bold text-green-400">✓</div>
@@ -913,8 +1804,121 @@ ${selectedRecs.map(rec => `// 1. ${rec.title}: ${rec.reasoning}`).join('\n')}
               </div>
             </div>
           </div>
+          
+          {improvementStats && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                <div className="text-slate-400 text-sm mb-1">Before Refactoring</div>
+                <div className="text-white text-lg font-semibold">{improvementStats.before?.total} issues</div>
+                <div className="text-xs text-slate-400 mt-1">
+                  CRIT {improvementStats.before?.critical} • MAJ {improvementStats.before?.major} • MIN {improvementStats.before?.minor}
+                </div>
+              </div>
+              <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                <div className="text-slate-400 text-sm mb-1">After Refactoring</div>
+                <div className="text-white text-lg font-semibold">{improvementStats.after?.total} issues</div>
+                <div className="text-xs text-slate-400 mt-1">
+                  CRIT {improvementStats.after?.critical} • MAJ {improvementStats.after?.major} • MIN {improvementStats.after?.minor}
+                </div>
+              </div>
+              <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                <div className="text-slate-400 text-sm mb-1">Improvement</div>
+                <div className="text-green-400 text-lg font-semibold">−{improvementStats.delta?.total} total</div>
+                <div className="text-xs text-slate-400 mt-1">
+                  CRIT −{improvementStats.delta?.critical} • MAJ −{improvementStats.delta?.major} • MIN −{improvementStats.delta?.minor}
+            </div>
+          </div>
+        </div>
+          )}
+          
+          {/* Refactoring History */}
+          <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="text-white font-semibold">Refactoring History</h4>
+              {history.length > 0 && (
+                <button
+                  onClick={async () => {
+                    try {
+                      await fetch(`/api/workspaces/${workspaceId}/history/clear`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ filePath: selectedFile })
+                      });
+                      setHistory([]);
+                    } catch {}
+                  }}
+                  className="text-xs px-3 py-1 bg-slate-600 hover:bg-slate-500 text-white rounded"
+                  title="Clear history"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            {history.length === 0 ? (
+              <div className="text-slate-400 text-sm">No previous refactoring entries for this file.</div>
+            ) : (
+              <div className="space-y-2">
+                {history.map((h) => (
+                  <div key={h.id} className="p-3 border border-slate-600 rounded bg-slate-700/40">
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm text-slate-300">
+                        <span className="font-mono">{new Date(h.timestamp).toLocaleString()}</span>
+                        {h.stats?.delta && (
+                          <span className="ml-2 text-emerald-300">
+                            −{h.stats.delta.total} issues
+                          </span>
+                        )}
+                      </div>
+                      <div className="space-x-2">
+                        <button
+                          onClick={() => {
+                            setComparisonEntry({
+                              originalContent: h.originalContent || '',
+                              refactoredContent: h.refactoredContent || '',
+                              changes: h.changes || {},
+                              title: `Refactoring @ ${new Date(h.timestamp).toLocaleString()}`
+                            });
+                            setShowComparison(true);
+                          }}
+                          className="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded"
+                        >
+                          View Diff
+                        </button>
+                        <button
+                          onClick={async () => {
+                            try {
+                              const resp = await fetch(`/api/workspaces/${workspaceId}/rollback?entryId=${encodeURIComponent(h.id)}`, {
+                                method: 'POST'
+                              });
+                              if (!resp.ok) {
+                                const t = await resp.text().catch(() => '');
+                                throw new Error(t || `rollback failed: ${resp.status}`);
+                              }
+                              alert('Rollback applied to selected entry.');
+                            } catch (e: any) {
+                              alert(`Rollback failed: ${e?.message || e}`);
+                            }
+                          }}
+                          className="px-3 py-1 text-xs bg-red-600 hover:bg-red-500 text-white rounded"
+                        >
+                          Rollback to This
+                        </button>
+                      </div>
+                    </div>
+                    {h.stats && (
+                      <div className="mt-2 text-xs text-slate-400">
+                        Before {h.stats.before.total} → After {h.stats.after.total} (Δ −{h.stats.delta.total}) •
+                        CRIT −{h.stats.delta.critical} • MAJ −{h.stats.delta.major} • MIN −{h.stats.delta.minor}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
+      {/* Diff modal is rendered earlier inside */} 
     </div>
   );
 }

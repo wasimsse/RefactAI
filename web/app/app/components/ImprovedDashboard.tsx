@@ -24,14 +24,12 @@ import { SkeletonCard, SkeletonChart, SkeletonFileList, SkeletonCodeSmell, FileA
 import CodePreview from './CodePreview';
 import CodeViewer from './CodeViewer';
 import ErrorBoundary from './ErrorBoundary';
-import RefactoringOperations from './RefactoringOperations';
 import RefactoringMonitor from './RefactoringMonitor';
-import LLMRefactoring from './LLMRefactoring';
 import ControlledRefactoring from './ControlledRefactoring';
+import RefactoringOperations from './RefactoringOperations';
 import SecurityAnalysisDashboard from './SecurityAnalysisDashboard';
 import ProjectHub, { projectHubUtils } from './ProjectHub';
 import CodeSmellsDashboard from './CodeSmellsDashboard';
-import EnhancedRefactoringDashboard from './EnhancedRefactoringDashboard';
 
 interface ImprovedDashboardProps {
   workspaceId: string;
@@ -50,7 +48,8 @@ export default function ImprovedDashboard({
   onAnalysisComplete,
   setCurrentWorkspace
 }: ImprovedDashboardProps) {
-  const [activeView, setActiveView] = useState<'overview' | 'files' | 'analysis' | 'security' | 'enhanced' | 'enhanced-refactoring' | 'dependencies' | 'refactoring' | 'llm-refactoring' | 'controlled-refactoring' | 'monitor' | 'projects'>('overview');
+  const [activeView, setActiveView] = useState<'overview' | 'files' | 'analysis' | 'security' | 'enhanced' | 'dependencies' | 'refactoring' | 'monitor' | 'projects'>('overview');
+  const [refactoringMode, setRefactoringMode] = useState<'agentic' | 'operations'>('agentic');
   const [selectedFile, setSelectedFile] = useState<FileInfo | null>(null);
   const [fileAnalysis, setFileAnalysis] = useState<any>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -274,6 +273,64 @@ export default function ImprovedDashboard({
       console.error('Failed to load file dependency analysis:', error);
     }
   };
+
+  // Listen for associated-file open events from child components (e.g., ControlledRefactoring)
+  useEffect(() => {
+    const handler = (e: any) => {
+      try {
+        const targetPath: string | undefined = e?.detail?.filePath;
+        if (!targetPath) return;
+        // Find best match from known files
+        const norm = (p: string) => String(p || '').replace(/\\\\/g, '/').toLowerCase();
+        const t = norm(targetPath);
+        const file =
+          files.find(f => norm(f.relativePath) === t) ||
+          files.find(f => norm(f.relativePath).endsWith('/' + t.split('/').pop())) ||
+          null;
+        if (file) {
+          setSelectedFile(file);
+          setActiveView('analysis');
+          setFileAnalysis(null);
+          setTimeout(() => analyzeFile(), 100);
+        } else {
+          console.warn('Associated file not found in workspace files:', targetPath);
+          // Fallback: attempt to open by path directly and analyze
+          (async () => {
+            try {
+              const contentResp = await apiClient.getFileContent(workspaceId, targetPath);
+              const pseudoFile: FileInfo = {
+                name: targetPath.split('/').pop() || targetPath,
+                relativePath: targetPath,
+                type: 'SOURCE',
+                metrics: {
+                  linesOfCode: (contentResp?.content || '').split('\\n').length,
+                  cyclomaticComplexity: 0,
+                  cognitiveComplexity: 0,
+                  methodCount: 0,
+                  classCount: 0,
+                  commentLines: 0,
+                  blankLines: 0,
+                },
+                findings: 0,
+                codeSmells: 0 as any,
+                lastModified: Date.now(),
+              };
+              setSelectedFile(pseudoFile);
+              setActiveView('analysis');
+              setFileAnalysis(null);
+              setTimeout(() => analyzeFile(), 100);
+            } catch (openErr) {
+              console.error('Failed to open associated file content:', openErr);
+            }
+          })();
+        }
+      } catch (err) {
+        console.error('Failed to open associated file:', err);
+      }
+    };
+    window.addEventListener('refactai-open-associated-file', handler as EventListener);
+    return () => window.removeEventListener('refactai-open-associated-file', handler as EventListener);
+  }, [files]);
 
   // File analysis function
   const analyzeFile = async () => {
@@ -1586,9 +1643,7 @@ export default function ImprovedDashboard({
               { id: 'security', label: 'Security', icon: Shield },
               { id: 'dependencies', label: 'Dependencies', icon: Network },
               { id: 'enhanced', label: 'Enhanced', icon: Zap },
-              { id: 'refactoring', label: 'Refactoring', icon: Wrench },
-              { id: 'llm-refactoring', label: 'AI Refactoring', icon: Brain },
-        { id: 'controlled-refactoring', label: 'Controlled Refactoring', icon: Shield },
+              { id: 'refactoring', label: 'AI Refactoring', icon: Brain },
               { id: 'monitor', label: 'Monitor', icon: Activity },
               { id: 'projects', label: 'Project Hub', icon: Database }
             ].map(({ id, label, icon: Icon, count }) => (
@@ -1748,11 +1803,11 @@ export default function ImprovedDashboard({
                   Re-analyze
                 </button>
                 <button
-                  onClick={() => setActiveView('controlled-refactoring')}
+                  onClick={() => setActiveView('refactoring')}
                   className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors flex items-center"
                 >
-                  <Shield className="w-4 h-4 mr-2" />
-                  Controlled Refactor
+                  <Brain className="w-4 h-4 mr-2" />
+                  AI Refactor
                 </button>
                 <button
                   onClick={() => {
@@ -1970,28 +2025,28 @@ export default function ImprovedDashboard({
                            </p>
                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                              <button
-                               onClick={() => setActiveView('controlled-refactoring')}
+                               onClick={() => setActiveView('refactoring')}
                                className="bg-green-600 hover:bg-green-700 text-white rounded-lg p-3 text-sm transition-colors flex items-center justify-center"
                              >
                                <Wand2 className="w-4 h-4 mr-2" />
                                Fix Code Smells
                              </button>
                              <button
-                               onClick={() => setActiveView('controlled-refactoring')}
+                               onClick={() => setActiveView('refactoring')}
                                className="bg-blue-600 hover:bg-blue-700 text-white rounded-lg p-3 text-sm transition-colors flex items-center justify-center"
                              >
                                <Code className="w-4 h-4 mr-2" />
                                Extract Methods
                              </button>
                              <button
-                               onClick={() => setActiveView('controlled-refactoring')}
+                               onClick={() => setActiveView('refactoring')}
                                className="bg-purple-600 hover:bg-purple-700 text-white rounded-lg p-3 text-sm transition-colors flex items-center justify-center"
                              >
                                <Zap className="w-4 h-4 mr-2" />
                                Optimize Performance
                              </button>
                              <button
-                               onClick={() => setActiveView('controlled-refactoring')}
+                               onClick={() => setActiveView('refactoring')}
                                className="bg-orange-600 hover:bg-orange-700 text-white rounded-lg p-3 text-sm transition-colors flex items-center justify-center"
                              >
                                <Eye className="w-4 h-4 mr-2" />
@@ -2641,12 +2696,12 @@ export default function ImprovedDashboard({
                                         setFileCodeSmells(fileCodeSmells);
                                       }
                                       
-                                      setActiveView('enhanced-refactoring');
+                                      setActiveView('refactoring');
                                     } catch (error) {
                                       console.error('Failed to load file content:', error);
                                       setFileContent('// Failed to load file content');
                                       setFileCodeSmells([]);
-                                      setActiveView('enhanced-refactoring');
+                                      setActiveView('refactoring');
                                     } finally {
                                       setLoadingFileContent(false);
                                     }
@@ -3114,11 +3169,11 @@ export default function ImprovedDashboard({
                           try {
                             const content = await apiClient.getFileContent(workspaceId, file.relativePath);
                             setFileContent(typeof content === 'string' ? content : content.content || '');
-                            setActiveView('enhanced-refactoring');
+                            setActiveView('refactoring');
                           } catch (error) {
                             console.error('Failed to load file content:', error);
                             setFileContent('// Failed to load file content');
-                            setActiveView('enhanced-refactoring');
+                            setActiveView('refactoring');
                           } finally {
                             setLoadingFileContent(false);
                           }
@@ -3194,95 +3249,69 @@ export default function ImprovedDashboard({
             </div>
           )}
 
-          {activeView === 'enhanced-refactoring' && selectedFile && (
-            <div className="h-full overflow-y-auto">
-              <EnhancedRefactoringDashboard 
-                workspaceId={workspaceId}
-                selectedFile={selectedFile.relativePath}
-                fileContent={fileContent}
-                codeSmells={fileCodeSmells}
-                onRefactoringComplete={(refactoredCode) => {
-                  console.log('Enhanced refactoring completed:', refactoredCode);
-                  setActiveView('enhanced');
-                }}
-                onBack={() => setActiveView('enhanced')}
-              />
-            </div>
-          )}
-
           {activeView === 'refactoring' && (
             <div className="h-full overflow-y-auto p-6">
               <div className="space-y-6">
                 <div className="flex items-center justify-between">
                   <div>
-                    <h2 className="text-2xl font-bold text-white">Refactoring Operations</h2>
-                    <p className="text-slate-400">Safe refactoring with ripple impact analysis</p>
+                    <h2 className="text-2xl font-bold text-white">AI Refactoring Engine</h2>
+                    <p className="text-slate-400">
+                      {refactoringMode === 'agentic' 
+                        ? 'Agentic-based refactoring with code smell detection and analysis'
+                        : 'Refactoring operations with ripple impact analysis'}
+                    </p>
+                  </div>
+                  <div className="flex items-center space-x-3">
+                    <button
+                      onClick={() => setRefactoringMode(refactoringMode === 'agentic' ? 'operations' : 'agentic')}
+                      className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors text-sm flex items-center"
+                    >
+                      <Zap className="w-4 h-4 mr-2" />
+                      {refactoringMode === 'agentic' ? 'Switch to Operations' : 'Switch to Agentic'}
+                    </button>
                   </div>
                 </div>
 
-                <RefactoringOperations
-                  workspaceId={workspaceId}
-                  selectedFile={selectedFile?.relativePath || ''}
-                  onRefactoringComplete={() => {
-                    // Refresh the analysis after refactoring
-                    if (onAnalysisComplete) {
-                      onAnalysisComplete();
-                    }
-                  }}
-                />
-              </div>
-            </div>
-          )}
-
-          {activeView === 'llm-refactoring' && (
-            <div className="h-full overflow-y-auto p-6">
-              <div className="space-y-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h2 className="text-2xl font-bold text-white">AI-Powered Refactoring</h2>
-                    <p className="text-slate-400">Intelligent code refactoring with LLM assistance</p>
+                {selectedFile ? (
+                  refactoringMode === 'agentic' ? (
+                    <ControlledRefactoring
+                      workspaceId={workspaceId}
+                      selectedFile={selectedFile.relativePath}
+                      fileContent={fileContent || ''}
+                      codeSmells={fileCodeSmells || []}
+                      onRefactoringComplete={(refactoredCode) => {
+                        console.log('Refactoring completed:', refactoredCode);
+                        if (onAnalysisComplete) {
+                          onAnalysisComplete();
+                        }
+                      }}
+                      onBack={() => setActiveView('analysis')}
+                    />
+                  ) : (
+                    <RefactoringOperations
+                      workspaceId={workspaceId}
+                      selectedFile={selectedFile.relativePath}
+                      onRefactoringComplete={() => {
+                        console.log('Refactoring operations completed');
+                        if (onAnalysisComplete) {
+                          onAnalysisComplete();
+                        }
+                      }}
+                    />
+                  )
+                ) : (
+                  <div className="bg-slate-800 rounded-xl p-12 border border-slate-700 text-center">
+                    <FileText className="w-16 h-16 text-slate-400 mx-auto mb-4" />
+                    <h3 className="text-xl font-semibold text-white mb-2">Select a File to Refactor</h3>
+                    <p className="text-slate-400 mb-6">Choose a file from the file list to start refactoring</p>
+                    <button
+                      onClick={() => setActiveView('files')}
+                      className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
+                    >
+                      Browse Files
+                    </button>
                   </div>
-                </div>
-
-                <LLMRefactoring
-                  workspaceId={workspaceId}
-                  selectedFile={selectedFile?.relativePath || ''}
-                  fileContent={selectedFile ? `// Loading content for ${selectedFile.name}...` : ''}
-                  onRefactoringComplete={(refactoredCode) => {
-                    console.log('LLM refactoring completed:', refactoredCode);
-                    if (onAnalysisComplete) {
-                      onAnalysisComplete();
-                    }
-                  }}
-                  onBackToAnalysis={() => setActiveView('analysis')}
-                />
-              </div>
-            </div>
-          )}
-
-          {activeView === 'controlled-refactoring' && (
-            <div className="h-full overflow-y-auto p-6">
-              <div className="space-y-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h2 className="text-2xl font-bold text-white">Controlled AI Refactoring</h2>
-                    <p className="text-slate-400">Safe, intelligent refactoring with AI recommendations</p>
-                  </div>
-                </div>
-
-                <ControlledRefactoring
-                  workspaceId={workspaceId}
-                  selectedFile={selectedFile?.relativePath || ''}
-                  fileContent={selectedFile ? `// Loading content for ${selectedFile.name}...` : ''}
-                  codeSmells={fileAnalysis?.codeSmells || []}
-                  onRefactoringComplete={(refactoredCode) => {
-                    console.log('Controlled refactoring completed:', refactoredCode);
-                    if (onAnalysisComplete) {
-                      onAnalysisComplete();
-                    }
-                  }}
-                  onBack={() => setActiveView('analysis')}
-                />
+                )}
               </div>
             </div>
           )}

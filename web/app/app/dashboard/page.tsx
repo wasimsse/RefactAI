@@ -3,9 +3,11 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, Upload, GitBranch, Folder, File, Search, Filter, Eye, Download, BarChart3, Code, TestTube, Settings, Database, FileText, AlertTriangle, CheckCircle, Clock, Users, Zap, Shield, TrendingUp, Play, RefreshCw, Plus } from 'lucide-react';
+import JSZip from 'jszip';
 import BrandLogo, { BrandName } from '../components/BrandLogo';
 import { apiClient, type Workspace, type Assessment, type Plan, type FileInfo } from '../api/client';
 import { cachedApiClient } from '../api/cachedClient';
+import { cacheUtils } from '../utils/cache';
 import FileViewer from '../components/FileViewer';
 import ImprovedDashboard from '../components/ImprovedDashboard';
 import { DashboardSkeleton } from '../components/SkeletonLoader';
@@ -74,9 +76,14 @@ export default function DashboardPage() {
         }).length;
       })();
 
+      // Prefer assessment count when present; otherwise fall back to backend-provided codeSmells metric
+      const codeSmellsCount = countFromAssessment > 0
+        ? countFromAssessment
+        : (typeof (file as any).codeSmells === 'number' ? (file as any).codeSmells : 0);
+
       return {
         ...file,
-        codeSmells: countFromAssessment
+        codeSmells: codeSmellsCount,
       } as FileInfo;
     });
     
@@ -86,7 +93,6 @@ export default function DashboardPage() {
 
   // Helper function to create ZIP from files
   const createZipFromFiles = async (files: File[]): Promise<File> => {
-    const JSZip = (await import('jszip')).default;
     const zip = new JSZip();
     
     // Add all files to the ZIP
@@ -109,9 +115,21 @@ export default function DashboardPage() {
   useEffect(() => {
     const initializeDashboard = async () => {
       try {
-        console.log('Initializing dashboard...');
-        // Load existing workspaces without clearing them
-        await loadWorkspaces();
+        console.log('Initializing dashboard with fresh state...');
+        
+        // Clear all cache to ensure fresh data
+        cacheUtils.clear();
+        console.log('Cache cleared');
+        
+        // Start with clean state - don't auto-load workspaces
+        // User must explicitly upload/clone a project
+        setCurrentWorkspace(null);
+        setWorkspaces([]);
+        setFiles([]);
+        setAssessment(null);
+        setPlan(null);
+        setLoadingStep('Ready to upload new project');
+        setLoadingProgress(100);
       } catch (error) {
         console.error('Failed to initialize dashboard:', error);
         // On error, ensure we start with clean state
@@ -129,7 +147,7 @@ export default function DashboardPage() {
       setIsLoading(false);
       setLoadingStep('Ready');
       setLoadingProgress(100);
-    }, 5000); // Reduced to 5 second timeout
+    }, 3000); // Reduced to 3 second timeout
     
     initializeDashboard().finally(() => {
       clearTimeout(timeout);
@@ -240,6 +258,10 @@ export default function DashboardPage() {
     setLoadingProgress(10);
     
     try {
+      // Clear cache before uploading to ensure fresh data
+      cacheUtils.clear();
+      cachedApiClient.clearCache();
+      
       // Create a ZIP file from the selected files
       setLoadingStep('Creating project archive...');
       setLoadingProgress(20);
@@ -298,6 +320,10 @@ export default function DashboardPage() {
     setLoadingProgress(20);
     
     try {
+      // Clear cache before cloning to ensure fresh data
+      cacheUtils.clear();
+      cachedApiClient.clearCache();
+      
       setLoadingStep('Downloading repository...');
       setLoadingProgress(40);
       const workspace = await apiClient.cloneGitRepository(cloneUrl, cloneBranch);
@@ -377,33 +403,53 @@ export default function DashboardPage() {
     setShowClearConfirm(true);
   };
 
-  const confirmClearProject = () => {
-    // Clear all current project data
-    setCurrentWorkspace(null);
-    setAssessment(null);
-    setPlan(null);
-    setFiles([]);
-    setSelectedFile(null);
-    setFileContent('');
-    setShowFileViewer(false);
-    setActiveTab('overview');
-    setFileSearchTerm('');
-    setAnalysisProgress(0);
-    setLoadingStep('Ready');
-    setLoadingProgress(0);
-    
-    // Clear any cached data
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('refactai-cache');
+  const confirmClearProject = async () => {
+    try {
+      // Clear all current project data
+      setCurrentWorkspace(null);
+      setAssessment(null);
+      setPlan(null);
+      setFiles([]);
+      setSelectedFile(null);
+      setFileContent('');
+      setShowFileViewer(false);
+      setActiveTab('overview');
+      setFileSearchTerm('');
+      setAnalysisProgress(0);
+      setLoadingStep('Clearing all data...');
+      setLoadingProgress(0);
+      
+      // Clear cache
+      cacheUtils.clear();
+      cachedApiClient.clearCache();
+      
+      // Clear backend workspaces
+      try {
+        await apiClient.clearAllWorkspaces();
+        console.log('All backend workspaces cleared');
+      } catch (error) {
+        console.warn('Failed to clear backend workspaces:', error);
+        // Continue anyway - cache is cleared
+      }
+      
+      // Clear any localStorage data
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('refactai-cache');
+      }
+      
+      setLoadingStep('Ready to upload new project');
+      setLoadingProgress(100);
+    } catch (error) {
+      console.error('Error clearing project:', error);
+    } finally {
+      // Reset to initial state
+      setIsLoading(false);
+      setIsUploading(false);
+      setIsAnalyzing(false);
+      
+      // Close confirmation dialog
+      setShowClearConfirm(false);
     }
-    
-    // Reset to initial state
-    setIsLoading(false);
-    setIsUploading(false);
-    setIsAnalyzing(false);
-    
-    // Close confirmation dialog
-    setShowClearConfirm(false);
   };
 
   const cancelClearProject = () => {
@@ -747,13 +793,13 @@ export default function DashboardPage() {
                 <AlertTriangle className="w-6 h-6 text-amber-400" />
               </div>
               <div>
-                <h3 className="text-xl font-bold text-white">Clear Current Project?</h3>
-                <p className="text-slate-400 text-sm">This will remove all analysis data and start fresh.</p>
+                <h3 className="text-xl font-bold text-white">Clear All Projects?</h3>
+                <p className="text-slate-400 text-sm">This will remove all projects from backend and cache, starting completely fresh.</p>
               </div>
             </div>
             
             <p className="text-slate-300 mb-8 leading-relaxed">
-              Are you sure you want to clear the current project analysis? This action cannot be undone and you'll need to upload or clone a new project to continue.
+              Are you sure you want to clear all projects? This will delete all workspaces from the backend server and clear all cached data. This action cannot be undone and you'll need to upload or clone a new project to continue.
             </p>
             
             <div className="flex space-x-4">
@@ -767,7 +813,7 @@ export default function DashboardPage() {
                 onClick={confirmClearProject}
                 className="flex-1 bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white px-6 py-3 rounded-xl font-semibold transition-all duration-200 shadow-lg hover:shadow-xl transform hover:scale-105"
               >
-                Clear Project
+                Clear All & Start Fresh
               </button>
             </div>
           </div>

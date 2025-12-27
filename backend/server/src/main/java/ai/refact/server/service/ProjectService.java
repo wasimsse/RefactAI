@@ -212,6 +212,35 @@ public class ProjectService {
     }
     
     /**
+     * Register a recreated project context.
+     * Used when a project exists on disk but not in memory (e.g., after backend restart).
+     */
+    public void registerProject(String projectId, ProjectContext context) {
+        projects.put(projectId, context);
+        logger.info("Registered recreated project {} in session {}", projectId, sessionId);
+    }
+    
+    /**
+     * Recreate project context from existing directory on disk.
+     * Used when workspace exists on disk but not in memory.
+     */
+    public ProjectContext recreateProjectFromDisk(String projectId) throws IOException {
+        Path projectDir = getProjectDirectory(projectId);
+        if (!Files.exists(projectDir) || !Files.isDirectory(projectDir)) {
+            throw new IllegalArgumentException("Project directory does not exist: " + projectId);
+        }
+        
+        // Recreate context using existing method
+        ProjectContext context = createProjectContext(projectId, projectDir);
+        
+        // Register it in memory
+        registerProject(projectId, context);
+        
+        logger.info("Recreated project {} from disk with {} source files", projectId, context.sourceFiles().size());
+        return context;
+    }
+    
+    /**
      * List all projects for current session only.
      */
     public List<ProjectContext> listProjects() {
