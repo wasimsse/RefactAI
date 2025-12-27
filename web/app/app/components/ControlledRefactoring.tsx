@@ -722,6 +722,8 @@ export default function ControlledRefactoring({
         } else {
           refactoredCode = header + originalContent;
         }
+        // Set out to null on error so refactoringResponse is null
+        out = null;
       }
 
       console.log('🎉 Refactoring execution completed successfully!');
@@ -729,7 +731,7 @@ export default function ControlledRefactoring({
       
       // Store out variable in a scope accessible to the apply section
       // out is declared earlier in the function (line 650), so it's accessible here
-      const refactoringResponse = out || null;
+      const refactoringResponse = out;
       
       // Calculate changes properly
       const calculateChanges = (original: string, refactored: string) => {
