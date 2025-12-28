@@ -1,11 +1,22 @@
 #!/bin/bash
 # Startup script for RefactAI Agents Service
 
-cd "$(dirname "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
 
-# Set OpenRouter API key if not already set
+# Load API key from environment variable or .env file
+# DO NOT hardcode API keys in this file!
 if [ -z "$OPENROUTER_API_KEY" ]; then
-    export OPENROUTER_API_KEY="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"
+    if [ -f "$SCRIPT_DIR/.env" ]; then
+        # Load .env file (simple parsing, no comments or spaces)
+        export $(grep -v '^#' "$SCRIPT_DIR/.env" | grep -v '^$' | xargs)
+    fi
+    if [ -z "$OPENROUTER_API_KEY" ]; then
+        echo "❌ ERROR: OPENROUTER_API_KEY not set!"
+        echo "   Set it via: export OPENROUTER_API_KEY='your-key-here'"
+        echo "   Or create agents/.env file with: OPENROUTER_API_KEY=your-key-here"
+        exit 1
+    fi
 fi
 
 # Set defaults if not provided
