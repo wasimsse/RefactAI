@@ -317,7 +317,8 @@ export default function ControlledRefactoring({
         body: JSON.stringify({ 
           workspaceId,
           filePath: selectedFile,
-          goals: ['reduce code smells', 'improve readability', 'enhance maintainability']
+          goals: ['reduce code smells', 'improve readability', 'enhance maintainability'],
+          providedSmells: effectiveCodeSmells && effectiveCodeSmells.length > 0 ? effectiveCodeSmells : undefined
         })
       });
 
