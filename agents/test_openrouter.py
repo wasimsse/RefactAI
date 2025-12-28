@@ -95,11 +95,11 @@ async def test_openrouter():
                 print("   - The API key is incorrect")
                 print("   - The API key has been revoked")
                 print("   - The API key doesn't have access to the selected model")
-                error_text = await r.text()
+                error_text = r.text
                 print(f"   Error details: {error_text[:200]}")
                 return False
             else:
-                error_text = await r.text()
+                error_text = r.text
                 print(f"❌ ERROR: OpenRouter API returned error")
                 print(f"   Status Code: {r.status_code}")
                 print(f"   Error: {error_text[:500]}")
