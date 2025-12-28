@@ -1060,9 +1060,9 @@ async def _refactor_impl(req: RefactorRequest):
         add_step(name="Fatal", agent="Coordinator", status="error", startedAt=now(), endedAt=now(), error=str(e))
         # Try to return at least the steps we have so far
         try:
-        return {
-            "success": False,
-            "steps": steps_json(),
+            return {
+                "success": False,
+                "steps": steps_json(),
                 "originalContent": original if 'original' in locals() else "",
                 "refactoredContent": candidate if 'candidate' in locals() else "",
                 "deltas": {},
