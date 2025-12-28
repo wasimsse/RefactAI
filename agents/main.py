@@ -1159,8 +1159,8 @@ async def analyze_for_refactoring(req: RefactorRequest):
                     print(f"⚠️ Could not get pre-computed smells: {e}")
                 
                 try:
-                # Try analyze-file endpoint first
-                try:
+                    # Try analyze-file endpoint first
+                    try:
                     analysis = await backend_post(client, "/workspace-enhanced-analysis/analyze-file", {
                         "workspaceId": req.workspaceId,
                         "filePath": req.filePath
@@ -1183,7 +1183,6 @@ async def analyze_for_refactoring(req: RefactorRequest):
                                 print(f"✅ Analysis-live found {len(smells)} code smells")
                         except Exception as e_live:
                             print(f"⚠️ analyze-live also failed: {e_live}")
-                            
                 except Exception as e1:
                     print(f"⚠️ analyze-file failed: {e1}, trying analyze-live...")
                     # Fallback: try analyze-live with file content
