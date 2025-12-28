@@ -326,6 +326,20 @@ export default function ControlledRefactoring({
       }
 
       const analysis = await response.json();
+      console.log("🔍 Agent Analysis Response:", analysis);
+      console.log("   Decision:", analysis.decision);
+      console.log("   Reason:", analysis.reason);
+      console.log("   Total Smells:", analysis.totalSmells);
+      console.log("   Selected Count:", analysis.selectedCount);
+      console.log("   Steps:", analysis.steps);
+      
+      // Log analysis steps to see what happened
+      if (analysis.steps) {
+        analysis.steps.forEach((step: any, idx: number) => {
+          console.log(`   Step ${idx + 1} (${step.name}):`, step.status, step.details || step.error);
+        });
+      }
+      
       setAgentAnalysis(analysis);
 
       // Convert agent's refactoring plan to recommendations format for display

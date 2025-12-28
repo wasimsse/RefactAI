@@ -1158,6 +1158,11 @@ async def analyze_for_refactoring(req: RefactorRequest):
                         severity_counts[sev] = severity_counts.get(sev, 0) + 1
                     print(f"📊 Smell breakdown: {severity_counts}")
                     print(f"   Sample smell: {smells[0] if smells else 'N/A'}")
+                else:
+                    print(f"⚠️  Analysis returned 0 smells - this could mean:")
+                    print(f"   1. The file truly has no code smells (good code!)")
+                    print(f"   2. The analysis service is not detecting smells properly")
+                    print(f"   3. The file path or workspace is incorrect")
                 
                 add_step(name="Analyze", agent="Smell Detector", status="done", startedAt=steps_models[-1].startedAt, endedAt=now(), 
                         details={
