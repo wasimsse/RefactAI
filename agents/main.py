@@ -813,7 +813,7 @@ async def _refactor_impl(req: RefactorRequest):
                 try:
                     # Pass refactoring plan to make refactoring smell-driven
                     raw_llm = await call_llm_refactor(original, req.filePath, smells, req.goals, prior, refactoring_plan)
-                candidate = sanitize_llm_output(original, raw_llm)
+                    candidate = sanitize_llm_output(original, raw_llm)
                 except httpx.TimeoutException as te:
                     print(f"LLM call timeout: {te}")
                     candidate = apply_meaningful_fallback_refactor(original, smells)
