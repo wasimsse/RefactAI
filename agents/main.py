@@ -1161,7 +1161,7 @@ async def analyze_for_refactoring(req: RefactorRequest):
                 try:
                     # Try analyze-file endpoint first
                     try:
-                    analysis = await backend_post(client, "/workspace-enhanced-analysis/analyze-file", {
+                        analysis = await backend_post(client, "/workspace-enhanced-analysis/analyze-file", {
                         "workspaceId": req.workspaceId,
                         "filePath": req.filePath
                     })
