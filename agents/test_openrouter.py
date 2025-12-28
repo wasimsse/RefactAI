@@ -9,19 +9,35 @@ import sys
 import asyncio
 import httpx
 
-# Try to load .env file if python-dotenv is available
+# SINGLE SOURCE OF TRUTH: Load from agents/.env file ONLY
+# This is the ONLY place you need to paste your OpenRouter API key
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    # Load .env file from the agents directory (where this script is located)
+    env_path = os.path.join(os.path.dirname(__file__), '.env')
+    load_dotenv(dotenv_path=env_path)
 except ImportError:
+    print("⚠️  WARNING: python-dotenv not installed. Install with: pip install python-dotenv")
+    print("   Falling back to environment variable...")
     pass
 
-# Use same logic as main.py
+# Load API key - ONLY from .env file (or environment as fallback)
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 if not OPENROUTER_API_KEY:
-    print("❌ ERROR: OPENROUTER_API_KEY not set!")
-    print("   Set it via: export OPENROUTER_API_KEY='your-key-here'")
-    print("   Or create agents/.env file with: OPENROUTER_API_KEY=your-key-here")
+    print("=" * 70)
+    print("❌ ERROR: OPENROUTER_API_KEY not found!")
+    print("=" * 70)
+    print()
+    print("📍 SINGLE PLACE TO PASTE YOUR KEY:")
+    print("   File: agents/.env")
+    print("   Full path: " + os.path.join(os.path.dirname(__file__), '.env'))
+    print()
+    print("📝 Create the file with this content (ONE line only):")
+    print("   OPENROUTER_API_KEY=sk-or-v1-YOUR-NEW-KEY-HERE")
+    print()
+    print("💡 Quick command:")
+    print(f"   echo 'OPENROUTER_API_KEY=sk-or-v1-YOUR-NEW-KEY-HERE' > {os.path.join(os.path.dirname(__file__), '.env')}")
+    print()
     sys.exit(1)
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 MODEL = os.environ.get("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet")

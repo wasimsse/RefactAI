@@ -10,20 +10,42 @@ import json
 import hashlib
 from pathlib import Path
 
-# Try to load .env file if python-dotenv is available
+# SINGLE SOURCE OF TRUTH: Load from agents/.env file ONLY
+# This is the ONLY place you need to paste your OpenRouter API key
+# File location: agents/.env
+# Content: OPENROUTER_API_KEY=sk-or-v1-YOUR-NEW-KEY-HERE
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    # Load .env file from the agents directory (where this script is located)
+    env_path = Path(__file__).parent / '.env'
+    load_dotenv(dotenv_path=env_path)
 except ImportError:
+    print("⚠️  WARNING: python-dotenv not installed. Install with: pip install python-dotenv")
+    print("   Falling back to environment variable...")
     pass  # dotenv not installed, will use environment variables only
  
 # Point agents to the running backend by default (8083). Override with BACKEND_BASE if needed.
 BACKEND_BASE = os.environ.get("BACKEND_BASE", "http://localhost:8083/api")
-# Load from environment variable (preferred) or .env file
-# IMPORTANT: Never hardcode API keys in source code. Use environment variables or .env file.
+
+# Load OpenRouter API key - ONLY from .env file (or environment as fallback)
+# IMPORTANT: Paste your key in agents/.env file (single source of truth)
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 if not OPENROUTER_API_KEY:
-    print("⚠️  WARNING: OPENROUTER_API_KEY not set. Set it via environment variable or .env file.")
+    env_file_path = Path(__file__).parent / '.env'
+    print("=" * 70)
+    print("❌ ERROR: OPENROUTER_API_KEY not found!")
+    print("=" * 70)
+    print()
+    print("📍 SINGLE PLACE TO PASTE YOUR KEY:")
+    print(f"   File: agents/.env")
+    print(f"   Full path: {env_file_path}")
+    print()
+    print("📝 Create the file with this content (ONE line only):")
+    print("   OPENROUTER_API_KEY=sk-or-v1-YOUR-NEW-KEY-HERE")
+    print()
+    print("💡 Quick command:")
+    print(f"   echo 'OPENROUTER_API_KEY=sk-or-v1-YOUR-NEW-KEY-HERE' > {env_file_path}")
+    print()
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 MODEL = os.environ.get("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet")
 
