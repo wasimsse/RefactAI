@@ -1184,21 +1184,21 @@ async def analyze_for_refactoring(req: RefactorRequest):
                             except Exception as e_live:
                                 print(f"⚠️ analyze-live also failed: {e_live}")
                     except Exception as e1:
-                    print(f"⚠️ analyze-file failed: {e1}, trying analyze-live...")
-                    # Fallback: try analyze-live with file content
-                    try:
-                        analysis = await backend_post(client, "/workspace-enhanced-analysis/analyze-live", {
-                            "workspaceId": req.workspaceId,
-                            "filePath": req.filePath,
-                            "content": original
-                        })
-                        smells = analysis.get("codeSmells", [])
-                        print(f"✅ Analysis (fallback) successful: Found {len(smells)} code smells")
-                    except Exception as e2:
-                        print(f"❌ Both analysis methods failed: analyze-file={e1}, analyze-live={e2}")
-                        analysis_failed = True
-                        analysis_error = f"Both analysis endpoints failed: {str(e1)[:200]}, {str(e2)[:200]}"
-                        raise e2
+                        print(f"⚠️ analyze-file failed: {e1}, trying analyze-live...")
+                        # Fallback: try analyze-live with file content
+                        try:
+                            analysis = await backend_post(client, "/workspace-enhanced-analysis/analyze-live", {
+                                "workspaceId": req.workspaceId,
+                                "filePath": req.filePath,
+                                "content": original
+                            })
+                            smells = analysis.get("codeSmells", [])
+                            print(f"✅ Analysis (fallback) successful: Found {len(smells)} code smells")
+                        except Exception as e2:
+                            print(f"❌ Both analysis methods failed: analyze-file={e1}, analyze-live={e2}")
+                            analysis_failed = True
+                            analysis_error = f"Both analysis endpoints failed: {str(e1)[:200]}, {str(e2)[:200]}"
+                            raise e2
                 
                 # Log detailed smell information
                 if smells:
