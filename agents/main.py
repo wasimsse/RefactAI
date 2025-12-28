@@ -1200,8 +1200,8 @@ async def analyze_for_refactoring(req: RefactorRequest):
                             analysis_error = f"Both analysis endpoints failed: {str(e1)[:200]}, {str(e2)[:200]}"
                             raise e2
                 
-                # Log detailed smell information
-                if smells:
+                    # Log detailed smell information
+                    if smells:
                     severity_counts = {}
                     for s in smells:
                         sev = str(s.get("severity", "UNKNOWN")).upper()
