@@ -14,7 +14,9 @@ The OpenRouter API key has been configured and tested successfully.
 
 The API key is configured in `agents/main.py` with a fallback:
 ```python
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") or "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"
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+if not OPENROUTER_API_KEY:
+    raise ValueError("OPENROUTER_API_KEY must be set via environment variable or .env file")
 ```
 
 This means:
@@ -39,7 +41,7 @@ uvicorn main:app --host 0.0.0.0 --port 8091
 **Option 3: With environment variable**
 ```bash
 cd /Users/svm648/refactai/agents
-export OPENROUTER_API_KEY='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'
+export OPENROUTER_API_KEY='sk-or-v1-YOUR-API-KEY-HERE'
 uvicorn main:app --host 0.0.0.0 --port 8091
 ```
 

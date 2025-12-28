@@ -17,7 +17,12 @@ except ImportError:
     pass
 
 # Use same logic as main.py
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") or "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"
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+if not OPENROUTER_API_KEY:
+    print("❌ ERROR: OPENROUTER_API_KEY not set!")
+    print("   Set it via: export OPENROUTER_API_KEY='your-key-here'")
+    print("   Or create agents/.env file with: OPENROUTER_API_KEY=your-key-here")
+    sys.exit(1)
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 MODEL = os.environ.get("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet")
 
