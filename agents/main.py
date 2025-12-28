@@ -186,6 +186,7 @@ class RefactorRequest(BaseModel):
     filePath: str
     goals: Optional[List[str]] = None
     selectedSmells: Optional[List[str]] = None  # Smell IDs that agent selected to handle
+    providedSmells: Optional[List[Dict]] = None  # Pre-computed smells from frontend (if available)
 
 
 class StepLog(BaseModel):
