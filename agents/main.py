@@ -1126,25 +1126,39 @@ async def analyze_for_refactoring(req: RefactorRequest):
             analysis_failed = False
             analysis_error = None
             
-            # First, try to get smells from the workspace file list (if available)
-            # This often has pre-computed code smells that are more reliable
-            try:
-                print(f"🔍 Attempting to get pre-computed smells from workspace file list...")
-                files_resp = await backend_get(client, f"/workspaces/{req.workspaceId}/files")
-                if files_resp and isinstance(files_resp, list):
-                    # Find the file in the list
-                    for file_info in files_resp:
-                        if file_info.get("relativePath") == req.filePath or file_info.get("path", "").endswith(req.filePath):
-                            # Check if file has codeSmells count
-                            code_smells_count = file_info.get("codeSmells")
-                            if code_smells_count and code_smells_count > 0:
-                                print(f"📊 Found pre-computed code smells count: {code_smells_count}")
-                                # If we have a count but no detailed smells, we know smells exist
-                                # This will help us make the right decision
-            except Exception as e:
-                print(f"⚠️ Could not get pre-computed smells: {e}")
-            
-            try:
+            # First, check if frontend provided pre-computed smells (most reliable)
+            if req.providedSmells and len(req.providedSmells) > 0:
+                smells = req.providedSmells
+                print(f"✅ Using provided smells from frontend: {len(smells)} code smells")
+                add_step(name="Analyze", agent="Smell Detector", status="done", startedAt=steps_models[-1].startedAt, endedAt=now(), 
+                        details={
+                            "smellsFound": len(smells),
+                            "source": "frontend_provided",
+                            "critical": len([s for s in smells if str(s.get("severity", "")).upper() in ["CRITICAL", "CRIT", "HIGH", "ERROR"]]),
+                            "major": len([s for s in smells if str(s.get("severity", "")).upper() in ["MAJOR", "MAJ", "MEDIUM", "WARNING"]]),
+                            "minor": len([s for s in smells if str(s.get("severity", "")).upper() not in ["CRITICAL", "CRIT", "HIGH", "ERROR", "MAJOR", "MAJ", "MEDIUM", "WARNING"]])
+                        })
+            else:
+                # Try to get smells from backend analysis
+                # First, try to get smells from the workspace file list (if available)
+                # This often has pre-computed code smells that are more reliable
+                try:
+                    print(f"🔍 Attempting to get pre-computed smells from workspace file list...")
+                    files_resp = await backend_get(client, f"/workspaces/{req.workspaceId}/files")
+                    if files_resp and isinstance(files_resp, list):
+                        # Find the file in the list
+                        for file_info in files_resp:
+                            if file_info.get("relativePath") == req.filePath or file_info.get("path", "").endswith(req.filePath):
+                                # Check if file has codeSmells count
+                                code_smells_count = file_info.get("codeSmells")
+                                if code_smells_count and code_smells_count > 0:
+                                    print(f"📊 Found pre-computed code smells count: {code_smells_count}")
+                                    # If we have a count but no detailed smells, we know smells exist
+                                    # This will help us make the right decision
+                except Exception as e:
+                    print(f"⚠️ Could not get pre-computed smells: {e}")
+                
+                try:
                 # Try analyze-file endpoint first
                 try:
                     analysis = await backend_post(client, "/workspace-enhanced-analysis/analyze-file", {
