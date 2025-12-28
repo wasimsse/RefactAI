@@ -1122,18 +1122,58 @@ async def analyze_for_refactoring(req: RefactorRequest):
             # Step 2: Analyze code smells
             add_step(name="Analyze", agent="Smell Detector", status="running", startedAt=now())
             smells = []
+            analysis_failed = False
+            analysis_error = None
             try:
-                analysis = await backend_post(client, "/workspace-enhanced-analysis/analyze-file", {
-                    "workspaceId": req.workspaceId,
-                    "filePath": req.filePath
-                })
-                smells = analysis.get("codeSmells", [])
+                # Try analyze-file endpoint first
+                try:
+                    analysis = await backend_post(client, "/workspace-enhanced-analysis/analyze-file", {
+                        "workspaceId": req.workspaceId,
+                        "filePath": req.filePath
+                    })
+                    smells = analysis.get("codeSmells", [])
+                    print(f"✅ Analysis successful: Found {len(smells)} code smells")
+                except Exception as e1:
+                    print(f"⚠️ analyze-file failed: {e1}, trying analyze-live...")
+                    # Fallback: try analyze-live with file content
+                    try:
+                        analysis = await backend_post(client, "/workspace-enhanced-analysis/analyze-live", {
+                            "workspaceId": req.workspaceId,
+                            "filePath": req.filePath,
+                            "content": original
+                        })
+                        smells = analysis.get("codeSmells", [])
+                        print(f"✅ Analysis (fallback) successful: Found {len(smells)} code smells")
+                    except Exception as e2:
+                        print(f"❌ Both analysis methods failed: analyze-file={e1}, analyze-live={e2}")
+                        analysis_failed = True
+                        analysis_error = f"Both analysis endpoints failed: {str(e1)[:200]}, {str(e2)[:200]}"
+                        raise e2
+                
+                # Log detailed smell information
+                if smells:
+                    severity_counts = {}
+                    for s in smells:
+                        sev = str(s.get("severity", "UNKNOWN")).upper()
+                        severity_counts[sev] = severity_counts.get(sev, 0) + 1
+                    print(f"📊 Smell breakdown: {severity_counts}")
+                    print(f"   Sample smell: {smells[0] if smells else 'N/A'}")
+                
                 add_step(name="Analyze", agent="Smell Detector", status="done", startedAt=steps_models[-1].startedAt, endedAt=now(), 
-                        details={"smellsFound": len(smells), "critical": len([s for s in smells if s.get("severity") == "CRITICAL"]),
-                                "major": len([s for s in smells if s.get("severity") == "MAJOR"])})
+                        details={
+                            "smellsFound": len(smells), 
+                            "critical": len([s for s in smells if str(s.get("severity", "")).upper() in ["CRITICAL", "CRIT", "HIGH", "ERROR"]]),
+                            "major": len([s for s in smells if str(s.get("severity", "")).upper() in ["MAJOR", "MAJ", "MEDIUM", "WARNING"]]),
+                            "minor": len([s for s in smells if str(s.get("severity", "")).upper() not in ["CRITICAL", "CRIT", "HIGH", "ERROR", "MAJOR", "MAJ", "MEDIUM", "WARNING"]]),
+                            "analysisMethod": "analyze-file" if not analysis_failed else "failed"
+                        })
             except Exception as e:
-                add_step(name="Analyze", agent="Smell Detector", status="error", startedAt=steps_models[-1].startedAt, endedAt=now(), error=str(e)[:500])
-                # Continue with empty smells list
+                analysis_failed = True
+                analysis_error = str(e)[:500]
+                add_step(name="Analyze", agent="Smell Detector", status="error", startedAt=steps_models[-1].startedAt, endedAt=now(), 
+                        error=analysis_error,
+                        details={"error": analysis_error, "fallbackAttempted": True})
+                print(f"❌ Analysis step failed: {analysis_error}")
             
             # Step 3: Agent Decision - Automatically decide what to handle
             add_step(name="Decision", agent="Refactoring Advisor", status="running", startedAt=now())
@@ -1142,11 +1182,27 @@ async def analyze_for_refactoring(req: RefactorRequest):
             decision = "PROCEED"
             reason = ""
             
-            if not smells or len(smells) == 0:
+            # Check if analysis failed - if so, don't immediately SKIP, but indicate the issue
+            if analysis_failed:
+                decision = "PROCEED"  # Still proceed, but with a warning
+                reason = f"Code smell analysis failed ({analysis_error}). Proceeding with refactoring anyway to apply general improvements. You may want to check the backend analysis service."
+                add_step(name="Decision", agent="Refactoring Advisor", status="done", startedAt=steps_models[-1].startedAt, endedAt=now(),
+                        details={
+                            "decision": decision, 
+                            "reason": reason,
+                            "warning": "Analysis service unavailable - proceeding with general refactoring",
+                            "analysisError": analysis_error
+                        })
+            elif not smells or len(smells) == 0:
                 decision = "SKIP"
                 reason = "No code smells detected. The code appears to be well-structured and does not require refactoring at this time."
                 add_step(name="Decision", agent="Refactoring Advisor", status="done", startedAt=steps_models[-1].startedAt, endedAt=now(),
-                        details={"decision": decision, "reason": reason})
+                        details={
+                            "decision": decision, 
+                            "reason": reason,
+                            "analysisSuccessful": True,
+                            "smellsChecked": True
+                        })
             else:
                 # Agent automatically prioritizes and selects which smells to handle
                 # Handle case-insensitive severity matching and different severity formats
