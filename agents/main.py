@@ -1220,15 +1220,15 @@ async def analyze_for_refactoring(req: RefactorRequest):
                             "critical": len([s for s in smells if str(s.get("severity", "")).upper() in ["CRITICAL", "CRIT", "HIGH", "ERROR"]]),
                             "major": len([s for s in smells if str(s.get("severity", "")).upper() in ["MAJOR", "MAJ", "MEDIUM", "WARNING"]]),
                             "minor": len([s for s in smells if str(s.get("severity", "")).upper() not in ["CRITICAL", "CRIT", "HIGH", "ERROR", "MAJOR", "MAJ", "MEDIUM", "WARNING"]]),
-                            "analysisMethod": "analyze-file" if not analysis_failed else "failed"
-                        })
-            except Exception as e:
-                analysis_failed = True
-                analysis_error = str(e)[:500]
-                add_step(name="Analyze", agent="Smell Detector", status="error", startedAt=steps_models[-1].startedAt, endedAt=now(), 
-                        error=analysis_error,
-                        details={"error": analysis_error, "fallbackAttempted": True})
-                print(f"❌ Analysis step failed: {analysis_error}")
+                                "analysisMethod": "analyze-file" if not analysis_failed else "failed"
+                            })
+                except Exception as e:
+                    analysis_failed = True
+                    analysis_error = str(e)[:500]
+                    add_step(name="Analyze", agent="Smell Detector", status="error", startedAt=steps_models[-1].startedAt, endedAt=now(), 
+                            error=analysis_error,
+                            details={"error": analysis_error, "fallbackAttempted": True})
+                    print(f"❌ Analysis step failed: {analysis_error}")
             
             # Step 3: Agent Decision - Automatically decide what to handle
             add_step(name="Decision", agent="Refactoring Advisor", status="running", startedAt=now())
