@@ -93,7 +93,7 @@ const response = await fetch(`http://localhost:8080/api/workspace-enhanced-analy
 ### **1. Start the Backend**
 ```bash
 cd /Users/svm648/refactai/backend/server
-OPENROUTER_API_KEY=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 mvn spring-boot:run -Dspring-boot.run.arguments="--server.port=8080"
+OPENROUTER_API_KEY=sk-or-v1-XXXX...XXXX mvn spring-boot:run -Dspring-boot.run.arguments="--server.port=8080"
 ```
 
 ### **2. Start the Frontend**

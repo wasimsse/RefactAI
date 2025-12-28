@@ -351,7 +351,7 @@ Example content:
   {
     "id": "key-1729588734-1234",
     "provider": "openrouter",
-    "apiKey": "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",
+    "apiKey": "sk-or-v1-XXXX...XXXX",
     "name": "Default OpenRouter Key",
     "description": "Automatically created from environment variable",
     "isActive": true,
