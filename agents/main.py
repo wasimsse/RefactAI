@@ -1202,7 +1202,7 @@ async def analyze_for_refactoring(req: RefactorRequest):
                 
                     # Log detailed smell information
                     if smells:
-                    severity_counts = {}
+                        severity_counts = {}
                     for s in smells:
                         sev = str(s.get("severity", "UNKNOWN")).upper()
                         severity_counts[sev] = severity_counts.get(sev, 0) + 1
