@@ -1124,6 +1124,25 @@ async def analyze_for_refactoring(req: RefactorRequest):
             smells = []
             analysis_failed = False
             analysis_error = None
+            
+            # First, try to get smells from the workspace file list (if available)
+            # This often has pre-computed code smells that are more reliable
+            try:
+                print(f"🔍 Attempting to get pre-computed smells from workspace file list...")
+                files_resp = await backend_get(client, f"/workspaces/{req.workspaceId}/files")
+                if files_resp and isinstance(files_resp, list):
+                    # Find the file in the list
+                    for file_info in files_resp:
+                        if file_info.get("relativePath") == req.filePath or file_info.get("path", "").endswith(req.filePath):
+                            # Check if file has codeSmells count
+                            code_smells_count = file_info.get("codeSmells")
+                            if code_smells_count and code_smells_count > 0:
+                                print(f"📊 Found pre-computed code smells count: {code_smells_count}")
+                                # If we have a count but no detailed smells, we know smells exist
+                                # This will help us make the right decision
+            except Exception as e:
+                print(f"⚠️ Could not get pre-computed smells: {e}")
+            
             try:
                 # Try analyze-file endpoint first
                 try:
@@ -1133,6 +1152,23 @@ async def analyze_for_refactoring(req: RefactorRequest):
                     })
                     smells = analysis.get("codeSmells", [])
                     print(f"✅ Analysis successful: Found {len(smells)} code smells")
+                    
+                    # If analyze-file returns 0 smells but we know there should be smells, try analyze-live
+                    if len(smells) == 0:
+                        print(f"⚠️ analyze-file returned 0 smells, trying analyze-live with file content...")
+                        try:
+                            analysis_live = await backend_post(client, "/workspace-enhanced-analysis/analyze-live", {
+                                "workspaceId": req.workspaceId,
+                                "filePath": req.filePath,
+                                "content": original
+                            })
+                            smells_live = analysis_live.get("codeSmells", [])
+                            if len(smells_live) > 0:
+                                smells = smells_live
+                                print(f"✅ Analysis-live found {len(smells)} code smells")
+                        except Exception as e_live:
+                            print(f"⚠️ analyze-live also failed: {e_live}")
+                            
                 except Exception as e1:
                     print(f"⚠️ analyze-file failed: {e1}, trying analyze-live...")
                     # Fallback: try analyze-live with file content
